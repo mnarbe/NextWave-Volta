@@ -18,6 +18,7 @@ import type {
   Mandate,
 } from "../domain/types.js";
 import { NEGOTIATIONS_FILE, readJson, writeJson } from "./paths.js";
+import { exportNegotiation } from "./firebase.js";
 
 type Db = { updatedAt: string; carriers: CarrierNegotiation[] };
 
@@ -141,6 +142,8 @@ export function finalizeNegotiation(
   c.status = input.outcome;
 
   persist();
+  // Mirror the closed negotiation to Firestore (best-effort, non-blocking).
+  exportNegotiation(c);
   return c;
 }
 

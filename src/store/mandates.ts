@@ -6,6 +6,7 @@
 // -----------------------------------------------------------------------------
 import type { NegotiationMandate } from "../domain/types.js";
 import { MANDATE_FILE, readJson, writeJson } from "./paths.js";
+import { exportMandate } from "./firebase.js";
 
 let current: NegotiationMandate | null = readJson<NegotiationMandate>(MANDATE_FILE);
 
@@ -16,6 +17,8 @@ export function getMandate(): NegotiationMandate | null {
 export function saveMandate(mandate: NegotiationMandate): NegotiationMandate {
   current = mandate;
   writeJson(MANDATE_FILE, mandate);
+  // Mirror the captured mandate to Firestore (best-effort, non-blocking).
+  exportMandate(mandate);
   return mandate;
 }
 
