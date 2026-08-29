@@ -1,0 +1,23 @@
+{
+  "name": "volta-phase1",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Fase 1 de Volta: un agente de voz que hace UNA llamada saliente y negocia dentro de un mandato.",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "twilio": "^5.3.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/ws": "^8.5.12",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2"
+  }
+}
