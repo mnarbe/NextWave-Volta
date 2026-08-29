@@ -96,6 +96,9 @@ export class RealtimeBridge {
           output: {
             format: { type: "audio/pcm", rate: 24000 },
             voice: "alloy",
+            // Ritmo de habla de Volta. 1.0 = normal; subimos un poco para que
+            // hable más rápido sin atropellarse. Rango válido ~0.25–1.5.
+            speed: 1.2,
           },
         },
         tools,
@@ -112,9 +115,11 @@ export class RealtimeBridge {
         instructions: isIntake
           ? "Greet briefly, introduce yourself as Volta, say you're ready to take " +
             "the job details, and ask the client to walk you through the shipment " +
-            "and their maximum price. Then wait for their reply. Speak in English."
+            "and their maximum price. Then wait for their reply. Speak in English, " +
+            "at a brisk, efficient pace."
           : "Greet briefly, introduce yourself as Volta, and say you're calling to get " +
-            "a quote to move a container. Then wait for their reply. Speak in English.",
+            "a quote to move a container. Then wait for their reply. Speak in English, " +
+            "at a brisk, efficient pace.",
       },
     });
   }
@@ -214,6 +219,17 @@ export class RealtimeBridge {
       const mandate = (result as any).mandate;
       log(this.callId, "mandate_captured", mandate);
       this.cb.onEvent("mandate_captured", mandate);
+    }
+
+    // Oferta / condición / demora del carrier -> panel de negociación en la UI.
+    if (evt.name === "log_carrier_offer" && (result as any).carrier) {
+      log(this.callId, "carrier_offer", (result as any).carrier);
+      this.cb.onEvent("carrier_offer", (result as any).carrier);
+    }
+
+    // Compromiso cerrado -> refrescamos la tarjeta del carrier.
+    if (evt.name === "propose_commitment" && (result as any).committed) {
+      this.cb.onEvent("carrier_offer", { callId: this.callId });
     }
 
     // Negativa del carrier a bajar -> evento para el contador en la UI.

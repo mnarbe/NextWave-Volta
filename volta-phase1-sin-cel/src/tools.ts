@@ -7,7 +7,40 @@ import { randomUUID } from "node:crypto";
 import { getCall, log } from "./store.js";
 import { checkMandate } from "./mandate.js";
 import { saveMandate } from "./mandateStore.js";
-import type { NegotiationMandate, Proposal } from "./types.js";
+import {
+  recordOffer,
+  recordRefusal,
+  finalizeNegotiation,
+  resetNegotiations,
+} from "./negotiationStore.js";
+import type { Mandate, NegotiationMandate, Proposal } from "./types.js";
+
+// Cuántos días tarde llega el pickup respecto de la ventana pedida por el
+// cliente. 0 = dentro de la ventana. undefined = no hay ventana firme o no se
+// pudo parsear. Lo calculamos en código para no depender del modelo.
+function computeDelayDays(
+  mandate: Mandate | null,
+  pickupTime?: string
+): number | undefined {
+  if (!mandate || !pickupTime || !mandate.pickupWindowEnd) return undefined;
+  const endYear = Number(mandate.pickupWindowEnd.slice(0, 4));
+  if (!Number.isFinite(endYear) || endYear >= 2100) return undefined; // ventana "abierta"
+  const t = Date.parse(pickupTime);
+  const end = Date.parse(mandate.pickupWindowEnd);
+  if (Number.isNaN(t) || Number.isNaN(end)) return undefined;
+  const diff = t - end;
+  if (diff <= 0) return 0;
+  return Math.ceil(diff / 86_400_000);
+}
+
+function num(v: unknown): number | undefined {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function strArray(v: unknown): string[] {
+  return Array.isArray(v) ? v.map((x) => String(x)).filter(Boolean) : [];
+}
 
 // ---------------------------------------------------------------------------
 // FASE 0 — tools del INTAKE con el jurado.
@@ -136,6 +169,49 @@ export const toolDefinitions = [
   },
   {
     type: "function",
+    name: "log_carrier_offer",
+    description:
+      "Record what the carrier is offering or demanding, for the client dashboard. " +
+      "Call this EVERY time the carrier names or changes their price, gives a " +
+      "pickup date/time, says the earliest they can do is later than the " +
+      "requested window (a DELAY), or attaches any condition or caveat " +
+      "(prepayment, deposit, advance notice, detention/waiting fees, liftgate or " +
+      "extra-handling surcharge, insurance limits, no weekend pickups, etc.). " +
+      "It is fine to call it several times as the picture fills in; pass whatever " +
+      "you have this turn.",
+    parameters: {
+      type: "object",
+      properties: {
+        carrierName: {
+          type: "string",
+          description: "Carrier / dispatcher / company name, once you know it.",
+        },
+        priceMxn: { type: "number", description: "Price the carrier is quoting, in MXN." },
+        pickupTime: {
+          type: "string",
+          description: "Pickup date/time the carrier offered (ISO 8601 if possible).",
+        },
+        delayNote: {
+          type: "string",
+          description:
+            "Any timing deviation vs the client's requested window, in the " +
+            "carrier's words (e.g. 'earliest is Friday, driver shortage').",
+        },
+        conditions: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Conditions / surcharges / caveats the carrier attaches. One short " +
+            "phrase each (e.g. '30% prepayment', '48h advance notice', " +
+            "'MXN 500 detention fee after 2h').",
+        },
+        note: { type: "string", description: "Anything else worth recording." },
+      },
+      required: [],
+    },
+  },
+  {
+    type: "function",
     name: "note_carrier_refusal",
     description:
       "Call this EVERY time the carrier refuses to lower their price after you " +
@@ -158,7 +234,8 @@ export const toolDefinitions = [
     description:
       "End the call with the carrier politely. Call this after you've closed a " +
       "deal, or after the carrier refused to lower their price twice, or if " +
-      "their best price is over your cap.",
+      "their best price is over your cap. Pass the final picture so it lands on " +
+      "the client dashboard.",
     parameters: {
       type: "object",
       properties: {
@@ -166,6 +243,29 @@ export const toolDefinitions = [
           type: "string",
           enum: ["deal", "no_deal"],
           description: "Whether a commitment was reached.",
+        },
+        finalPriceMxn: {
+          type: "number",
+          description: "The price the call ended on, in MXN (agreed, or their last stance).",
+        },
+        finalPickupTime: {
+          type: "string",
+          description: "The pickup date/time the call ended on (ISO 8601 if possible).",
+        },
+        delayNote: {
+          type: "string",
+          description: "Timing deviation vs the client's requested window, if any.",
+        },
+        conditionsToRelay: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Carrier conditions / surcharges / caveats the client needs to be " +
+            "told about. One short phrase each.",
+        },
+        summary: {
+          type: "string",
+          description: "One line: how it ended and why.",
         },
       },
       required: [],
@@ -206,6 +306,8 @@ export async function runTool(
         capturedAt: new Date().toISOString(),
       };
       saveMandate(mandate);
+      // Trabajo nuevo: limpiamos las negociaciones con carriers de la corrida anterior.
+      resetNegotiations();
       result = { saved: true, mandate };
       break;
     }
@@ -216,8 +318,24 @@ export async function runTool(
     }
 
     // --- FASE 1: negociación con el carrier -------------------------------
+    case "log_carrier_offer": {
+      const pickupTime = args.pickupTime || undefined;
+      const carrier = recordOffer(callId, args.carrierName, {
+        ts: new Date().toISOString(),
+        priceMxn: num(args.priceMxn),
+        pickupTime,
+        pickupDelayDays: computeDelayDays(call.mandate, pickupTime),
+        delayNote: args.delayNote || undefined,
+        conditions: strArray(args.conditions),
+        note: args.note || undefined,
+      });
+      result = { ok: true, carrier };
+      break;
+    }
+
     case "note_carrier_refusal": {
       call.refusals += 1;
+      recordRefusal(callId, call.refusals);
       result = {
         refusals: call.refusals,
         shouldClose: call.refusals >= 2,
@@ -229,7 +347,19 @@ export async function runTool(
     }
 
     case "end_negotiation": {
-      result = { ok: true, ending: true, outcome: args.outcome || "no_deal" };
+      const outcome = args.outcome === "deal" ? "deal" : "no_deal";
+      const finalPickupTime = args.finalPickupTime || undefined;
+      const carrier = finalizeNegotiation(callId, {
+        outcome,
+        finalPriceMxn: num(args.finalPriceMxn),
+        finalPickupTime,
+        pickupDelayDays: computeDelayDays(call.mandate, finalPickupTime),
+        delayNote: args.delayNote || undefined,
+        conditionsToRelay: strArray(args.conditionsToRelay),
+        summary: args.summary || undefined,
+        mandate: call.mandate,
+      });
+      result = { ok: true, ending: true, outcome, carrier };
       break;
     }
 
@@ -274,6 +404,15 @@ export async function runTool(
         createdAt: new Date().toISOString(),
       };
       call.commitments.push(commitment);
+      // Reflejamos el compromiso en el registro de negociación (dashboard).
+      recordOffer(callId, args.agreedByName, {
+        ts: commitment.createdAt,
+        priceMxn: commitment.priceMxn,
+        pickupTime: commitment.pickupTime,
+        pickupDelayDays: computeDelayDays(call.mandate, commitment.pickupTime),
+        conditions: commitment.conditions,
+        note: "compromiso validado por check_mandate",
+      });
       // TODO (Fase 2): send_recap + timestamp de audio antes de contar como verificado.
       result = { committed: true, commitmentId: commitment.id };
       break;

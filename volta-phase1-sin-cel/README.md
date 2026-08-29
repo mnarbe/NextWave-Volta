@@ -70,14 +70,23 @@ Igual que `dev` pero sin recarga automática (`tsx src/server.ts`).
 ## Qué ves en pantalla
 
 - **Izquierda:** la conversación transcrita (vos y Volta).
-- **Derecha:**
-  - **Mandato capturado:** precio máximo (MXN) + origen, destino, contenedor,
+- **Derecha (dashboard):**
+  - **Pedido del cliente:** precio máximo (MXN) + origen, destino, contenedor,
     ventana de pickup y condiciones vetadas, a medida que Volta las saca.
+  - **Decisión final:** cómo cerró la negociación (trato / sin trato), con qué
+    carrier, a qué precio (vs. el tope) y a qué hora de pickup. Incluye la lista
+    **"A comunicar al cliente"**: demoras y condiciones del carrier que hay que
+    trasladarle al cliente después.
+  - **Negociación con carriers:** una tarjeta por carrier con su último precio,
+    la demora de pickup respecto de la ventana pedida (badge `⏱ +N días`), las
+    condiciones/recargos que ató (chips), el contador de negativas a bajar y el
+    historial completo de ofertas.
   - **Actividad del backend:** cada tool que llama el modelo, sus argumentos y el
     resultado.
 
-Si ya había un `data/mandate.json` de una corrida anterior, el panel lo precarga
-al abrir la página.
+Si ya había un `data/mandate.json` o `data/negotiations.json` de una corrida
+anterior, el panel los precarga al abrir la página. Un mandato nuevo
+(`set_negotiation_mandate`) limpia las negociaciones viejas.
 
 ---
 
@@ -97,6 +106,7 @@ Volta debería: repetir la ventana en ISO para confirmar, llamar a
 frase y cerrar.
 
 Probá también:
+
 - **Precio ambiguo:** "somewhere between 8 and 10 thousand" → Volta toma 10,000
   como tope y lo dice.
 - **Sin precio:** no menciones plata → Volta te lo pregunta directo y no guarda
@@ -107,37 +117,39 @@ Probá también:
 
 ## Endpoints (debug)
 
-| Método | Ruta | Qué devuelve |
-|---|---|---|
-| GET | `/mandate` | el último mandato capturado (o `null`) |
-| GET | `/calls/:id` | estado + log completo de una llamada |
+| Método | Ruta           | Qué devuelve                            |
+| ------- | -------------- | ---------------------------------------- |
+| GET     | `/mandate`      | el último mandato capturado (o`null`)                              |
+| GET     | `/negotiations` | array de negociaciones con carriers (ofertas, condiciones, decisión) |
+| GET     | `/calls/:id`    | estado + log completo de una llamada                                 |
 
 ---
 
 ## Problemas comunes
 
-| Síntoma | Causa / arreglo |
-|---|---|
-| `beta_api_shape_disabled` en el panel | tu cuenta/modelo no tiene Realtime GA. Usá `gpt-realtime`. |
-| Volta se auto-interrumpe | poné auriculares. Si sigue: subí `threshold` a `0.8` en `src/realtime.ts`. |
-| Te corta antes de terminar la frase | subí `silence_duration_ms` a `1000` en `src/realtime.ts`. |
-| Toma mucho ruido de ambiente | `noise_reduction: { type: "far_field" }` si hablás lejos del mic. |
-| No se escucha nada | revisá permisos de micrófono y que el navegador no esté en mute. |
+| Síntoma                                | Causa / arreglo                                                                   |
+| --------------------------------------- | --------------------------------------------------------------------------------- |
+| `beta_api_shape_disabled` en el panel | tu cuenta/modelo no tiene Realtime GA. Usá`gpt-realtime`.                      |
+| Volta se auto-interrumpe                | poné auriculares. Si sigue: subí`threshold` a `0.8` en `src/realtime.ts`. |
+| Te corta antes de terminar la frase     | subí`silence_duration_ms` a `1000` en `src/realtime.ts`.                   |
+| Toma mucho ruido de ambiente            | `noise_reduction: { type: "far_field" }` si hablás lejos del mic.              |
+| No se escucha nada                      | revisá permisos de micrófono y que el navegador no esté en mute.               |
 
 ---
 
 ## Archivos
 
-| Archivo | Rol |
-|---|---|
-| `public/index.html` | Cliente: captura mic, reproduce, panel de mandato + tools. |
-| `src/server.ts` | Sirve la UI + WS que puentea navegador ↔ OpenAI. `GET /mandate`. |
-| `src/realtime.ts` | Bridge con OpenAI Realtime (GA, PCM16 24 kHz) + eventos a la UI. |
-| `src/prompt.ts` | Instrucciones de Volta: `buildIntakeInstructions()` (jurado). |
-| `src/tools.ts` | Tools del intake: `set_negotiation_mandate`, `record_call_note`, `end_intake`. |
-| `src/mandateStore.ts` | Persiste el mandato en `data/mandate.json`. |
-| `src/mandate.ts` | Motor de validación (se usa en la fase de negociación). |
-| `src/store.ts` · `src/types.ts` · `src/config.ts` | Estado, tipos, config. |
+| Archivo                                                   | Rol                                                                                 |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `public/index.html`                                     | Cliente: captura mic, reproduce, panel de mandato + tools.                          |
+| `src/server.ts`                                         | Sirve la UI + WS que puentea navegador ↔ OpenAI.`GET /mandate`.                  |
+| `src/realtime.ts`                                       | Bridge con OpenAI Realtime (GA, PCM16 24 kHz) + eventos a la UI.                    |
+| `src/prompt.ts`                                         | Instrucciones de Volta:`buildIntakeInstructions()` (jurado).                      |
+| `src/tools.ts`                                          | Tools del intake:`set_negotiation_mandate`, `record_call_note`, `end_intake`. |
+| `src/mandateStore.ts`                                   | Persiste el mandato en`data/mandate.json`.                                        |
+| `src/negotiationStore.ts`                               | Estado de la negociación con carriers (ofertas, condiciones, demoras, decisión) en`data/negotiations.json`. |
+| `src/mandate.ts`                                        | Motor de validación (se usa en la fase de negociación).                           |
+| `src/store.ts` · `src/types.ts` · `src/config.ts` | Estado, tipos, config.                                                              |
 
 ---
 

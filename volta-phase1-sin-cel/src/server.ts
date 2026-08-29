@@ -17,6 +17,7 @@ import { config } from "./config.js";
 import { createCall, getCall } from "./store.js";
 import { RealtimeBridge } from "./realtime.js";
 import { getMandate } from "./mandateStore.js";
+import { beginNegotiation, getAllNegotiations } from "./negotiationStore.js";
 import type { Mandate, NegotiationMandate } from "./types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -37,6 +38,12 @@ app.get("/calls/:id", (req, res) => {
 // siguientes (negociación con proveedores) lo leen de acá.
 app.get("/mandate", (_req, res) => {
   res.json(getMandate());
+});
+
+// Estado de la negociación con carriers (para el dashboard). Un registro por
+// carrier: qué ofreció, condiciones/demoras, y la decisión final.
+app.get("/negotiations", (_req, res) => {
+  res.json(getAllNegotiations());
 });
 
 // Mandato por defecto para la fase de NEGOCIACIÓN con transportista (mode:
@@ -107,6 +114,10 @@ wss.on("connection", (browserWs) => {
               : DEFAULT_MANDATE;
         }
         callId = createCall(mandate);
+
+        // Abrimos el registro de negociación para este carrier (el nombre lo
+        // completa Volta con log_carrier_offer cuando lo sepa).
+        if (mode === "negotiate") beginNegotiation(callId, mandate);
 
         bridge = new RealtimeBridge(
           callId,

@@ -69,6 +69,7 @@ export type LogEntry = {
     | "barge_in"
     | "mandate_captured"
     | "intake_done"
+    | "carrier_offer"
     | "carrier_refusal"
     | "negotiation_done"
     | "error";
