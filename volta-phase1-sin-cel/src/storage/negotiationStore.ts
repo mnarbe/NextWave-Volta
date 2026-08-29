@@ -8,17 +8,12 @@
 //   - cada oferta / condición / demora que dijo el carrier (historial completo),
 //   - la decisión final (trato / sin trato) y qué hay que comunicarle al cliente.
 //
-// Persiste en data/negotiations.json. Se reinicia cuando entra un mandato nuevo
+// Persiste vía storage/persistence.ts (hoy un JSON). Se reinicia cuando entra un mandato nuevo
 // (arranca un trabajo nuevo) para que el panel muestre solo el trabajo actual.
 // -----------------------------------------------------------------------------
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import type { Mandate } from "./types.js";
+import { jsonCollection } from "./persistence.js";
+import type { Mandate } from "../types.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.join(__dirname, "..", "data");
-const FILE = path.join(DATA_DIR, "negotiations.json");
 
 // Una oferta puntual del carrier: lo que dijo en un momento de la charla.
 export type CarrierOffer = {
@@ -64,20 +59,16 @@ export type CarrierNegotiation = {
 
 type Db = { updatedAt: string; carriers: CarrierNegotiation[] };
 
-let db: Db = load();
+const store = jsonCollection<Db>("negotiations.json", () => ({
+  updatedAt: new Date().toISOString(),
+  carriers: [],
+}));
 
-function load(): Db {
-  try {
-    return JSON.parse(fs.readFileSync(FILE, "utf8")) as Db;
-  } catch {
-    return { updatedAt: new Date().toISOString(), carriers: [] };
-  }
-}
+let db: Db = store.read();
 
 function persist(): void {
   db.updatedAt = new Date().toISOString();
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(FILE, JSON.stringify(db, null, 2), "utf8");
+  store.write(db);
 }
 
 function find(callId: string): CarrierNegotiation | undefined {

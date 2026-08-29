@@ -1,163 +1,184 @@
-# Volta — Fase 0 (intake con el jurado)
+# Volta — agente de voz por teléfono (Twilio + OpenAI Realtime)
 
-Agente de voz que corre **en el navegador** (micrófono + parlantes) contra la
-**OpenAI Realtime API (GA)**. En esta fase Volta habla en **inglés** con el
-*jurado* (el que le encarga el transporte), le saca el **precio máximo en MXN**,
-lo guarda y le corta la llamada. Ese precio se usa después para negociar con los
-proveedores (fase 2, todavía no hecha).
+Volta atiende y hace **llamadas telefónicas reales** en el número
+**+1 585 601 1456**. Habla en inglés, le saca al cliente el **precio máximo en
+MXN**, y después **llama a los carriers** para negociar contra ese tope. Todo lo
+que pasa en la llamada se ve en vivo en el dashboard web.
+
+El navegador ya no es la línea: es la pantalla. (El modo micrófono sigue estando
+como fallback por si en la demo falla el teléfono.)
+
+> **¿Trabajás en equipo?** Leé [docs/EQUIPO.md](../docs/EQUIPO.md): quién toca
+> qué carpeta, los contratos entre áreas, y por qué el teléfono apunta a una
+> sola máquina a la vez.
 
 ---
 
-## Requisitos
+## Cómo está armado
 
-- **Node.js 20+** (probado con 24 LTS). `node -v` tiene que responder.
-- Una **API key de OpenAI** con acceso a la Realtime API **GA** (modelo
-  `gpt-realtime`). La beta ya no funciona.
-- **Auriculares** (sin ellos el mic capta la voz de Volta y se auto-interrumpe).
-- Un navegador Chromium (Chrome / Edge).
+```
+        llamada entrante                          llamada saliente
+   cliente ──> +1 585 601 1456              Volta ──> carrier
+                    │                                    │
+              POST /twilio/voice                  POST /call  (REST API)
+                    │  devuelve TwiML                     │
+                    ▼                                     ▼
+            <Connect><Stream url="wss://…/twilio/media"/>
+                             │
+                             ▼  WebSocket bidireccional, G.711 μ-law 8 kHz
+                   ┌──────────────────┐
+                   │  /twilio/media   │  passthrough de audio, sin transcodificar
+                   └────────┬─────────┘
+                            ▼
+                 OpenAI Realtime (gpt-realtime)
+                   audio.format = "audio/pcmu"
+                            │
+                     tools + transcripts
+                            ▼
+                   bus ──> dashboard (/ws)
+```
+
+El truco que mantiene esto simple: la Realtime API GA habla **G.711 μ-law 8 kHz**
+(`audio/pcmu`) nativo, que es exactamente el códec de Twilio Media Streams. El
+audio va y viene en base64 sin remuestrear ni convertir en ningún lado.
+
+Cada carpeta tiene un dueño (ver [docs/EQUIPO.md](../docs/EQUIPO.md)):
+
+| Archivo | Rol | Dueño |
+| --- | --- | --- |
+| `src/server.ts` | Cableado: monta rutas y WebSockets. Casi nunca se toca. | todos |
+| `src/routes/telephony.ts` | Webhooks de Twilio + API de control (llamar, colgar, health). | llamada |
+| `src/routes/data.ts` | Lectura del estado guardado. | datos |
+| `src/voice/twilioStream.ts` | Transporte teléfono: `/twilio/media` ↔ OpenAI. | llamada |
+| `src/voice/browserStream.ts` | Transporte navegador + socket del dashboard. | llamada |
+| `src/voice/realtime.ts` | Puente con OpenAI. Elige el códec según el transporte. | llamada |
+| `src/voice/twilio.ts` | TwiML, llamadas salientes, config del número, geo-permisos. | llamada |
+| `src/voice/prompt.ts` · `src/voice/tools.ts` | Qué sabe Volta y qué puede hacer. | llamada |
+| `src/storage/persistence.ts` | El único archivo que toca el disco. | datos |
+| `src/storage/mandateStore.ts` · `negotiationStore.ts` | Mandato y negociaciones. | datos |
+| `src/session.ts` | Arrancar una llamada, común a los dos transportes. | todos |
+| `src/bus.ts` | Fan-out de eventos a los dashboards. | todos |
+| `public/index.html` · `public/styles.css` | Estructura y aspecto del dashboard. | diseño |
+| `public/js/render.js` | Todo lo que dibuja. | diseño |
+| `public/js/client.js` · `public/js/audio.js` | WebSocket, teléfono y micrófono. | llamada |
+| `scripts/setup-twilio.ts` | Deja Twilio configurado sin entrar a la consola. | llamada |
+| `scripts/fake-twilio.mjs` | Se hace pasar por Twilio para probar sin gastar llamadas. | llamada |
 
 ---
 
 ## Setup
 
+**Requisitos:** Node 20+, una API key de OpenAI con Realtime GA (`gpt-realtime`),
+una cuenta paga de Twilio con un número, y un túnel público a este puerto
+(ngrok) porque Twilio tiene que poder alcanzar tu máquina.
+
 ```bash
-cd volta-phase1-sin-cel
 npm install
-cp .env.example .env
+cp .env.example .env    # y completá las claves
 ```
 
-Editá `.env` y poné tu key:
+`.env`:
 
 ```ini
-OPENAI_API_KEY=sk-...            # obligatorio
-OPENAI_REALTIME_MODEL=gpt-realtime   # opcional (default gpt-realtime)
-PORT=3000                        # opcional
+OPENAI_API_KEY=sk-...
+TWILIO_ACCOUNT_SID=AC...          # Console > Account Info
+TWILIO_AUTH_TOKEN=...             # ídem
+TWILIO_NUMBER=+15856011456
+PUBLIC_URL=https://tu-tunel.ngrok-free.dev
 ```
 
-`.env`, `node_modules/` y `data/` están en `.gitignore` — no se commitean.
+Levantá el túnel (dominio fijo, así la URL no cambia entre corridas):
+
+```bash
+ngrok http 3000
+```
+
+Y dejá el número apuntando a esta máquina — esto reemplaza a editar el webhook a
+mano en la consola de Twilio:
+
+```bash
+npm run setup:twilio
+```
+
+El script detecta la URL de ngrok sola (la lee de la API local del agente y la
+escribe en `.env` si falta), valida las credenciales, apunta el `voiceUrl` del
+número a `/twilio/voice`, y avisa si el país al que vas a llamar está bloqueado
+por geo-permisos. Pasale un destino para que lo chequee:
+
+```bash
+npm run setup:twilio -- +5215512345678
+```
 
 ---
 
 ## Correrlo
 
 ```bash
-npm run dev      # tsx watch: recarga solo al editar
+npm run dev
 ```
 
-Vas a ver:
+Abrí **http://localhost:3000** — ese es el dashboard, no hace falta apretar nada.
 
+**1. Intake.** Llamá desde tu celular al **+1 585 601 1456**. Volta atiende, se
+presenta y te pide el envío y el precio máximo. Cuando tiene el número firme
+llama a `set_negotiation_mandate`, te confirma el brief y **corta ella**. El
+mandato queda en `data/mandate.json` y en grande en el dashboard.
+
+**2. Negociación.** En la barra de arriba del dashboard poné el número del
+carrier en formato E.164 y apretá **Llamar al carrier**. Volta marca, negocia
+contra el tope, registra cada oferta/condición/demora, y cierra. Repetí con cada
+carrier: cada uno queda como una tarjeta en "Negociación con carriers".
+
+Volta cuelga sola cuando termina: antes de cortar manda un `mark` a Twilio y
+espera a que vuelva, así no se corta la última frase por la mitad.
+
+### Sin teléfono (fallback de demo)
+
+El botón **🎙 Modo navegador** hace lo de antes: el micrófono de esta máquina es
+la línea. Sirve si en el escenario no hay señal o se cae el túnel. Usá
+auriculares.
+
+### Probar sin gastar llamadas
+
+```bash
+npm run test:stream
 ```
-Volta (sin celular) escuchando en http://localhost:3000
-```
 
-1. Abrí **http://localhost:3000**.
-2. Poné los auriculares y apretá **Start**.
-3. Permití el micrófono cuando lo pida.
-4. Hacé de jurado: contale el envío y **cuánto es lo máximo que pagás** (en pesos).
-5. Cuando Volta tiene el número firme:
-   - llama a `set_negotiation_mandate` → se guarda en **`data/mandate.json`**,
-   - el panel derecho **"Mandato capturado"** muestra el precio en grande,
-   - te confirma el brief, te corta sutilmente y cuelga (`end_intake`).
-
-Para frenar el server: `Ctrl+C` en la terminal.
-
-### `npm run start`
-
-Igual que `dev` pero sin recarga automática (`tsx src/server.ts`).
+Se hace pasar por Twilio contra `/twilio/media`, y guarda lo que dice Volta en
+`volta-greeting.wav`. Si eso suena, el camino del audio está sano.
 
 ---
 
-## Qué ves en pantalla
+## Endpoints
 
-- **Izquierda:** la conversación transcrita (vos y Volta).
-- **Derecha (dashboard):**
-  - **Pedido del cliente:** precio máximo (MXN) + origen, destino, contenedor,
-    ventana de pickup y condiciones vetadas, a medida que Volta las saca.
-  - **Decisión final:** cómo cerró la negociación (trato / sin trato), con qué
-    carrier, a qué precio (vs. el tope) y a qué hora de pickup. Incluye la lista
-    **"A comunicar al cliente"**: demoras y condiciones del carrier que hay que
-    trasladarle al cliente después.
-  - **Negociación con carriers:** una tarjeta por carrier con su último precio,
-    la demora de pickup respecto de la ventana pedida (badge `⏱ +N días`), las
-    condiciones/recargos que ató (chips), el contador de negativas a bajar y el
-    historial completo de ofertas.
-  - **Actividad del backend:** cada tool que llama el modelo, sus argumentos y el
-    resultado.
+| Método | Ruta                  | Qué hace                                              |
+| ------ | --------------------- | ----------------------------------------------------- |
+| POST   | `/twilio/voice`       | Webhook de llamada entrante → TwiML con el `<Stream>` |
+| POST   | `/twilio/status`      | Ciclo de vida de la llamada (log)                     |
+| WSS    | `/twilio/media`       | Audio μ-law ↔ OpenAI                                  |
+| POST   | `/call`               | Volta llama: `{"to":"+52...","carrier":"..."}`        |
+| POST   | `/call/:sid/hangup`   | Cortar una llamada en curso                           |
+| GET    | `/twilio/health`      | Si el teléfono está listo y con qué URLs               |
+| POST   | `/twilio/setup`       | Apuntar el número a esta máquina                      |
+| GET    | `/twilio/geo?to=+52…` | Si Twilio deja llamar a ese país                       |
+| GET    | `/mandate`            | El mandato capturado                                  |
+| GET    | `/negotiations`       | Negociaciones con carriers                            |
+| GET    | `/calls/:id`          | Estado + log completo de una llamada                  |
+| WSS    | `/ws`                 | Dashboard (y modo micrófono)                          |
 
-Si ya había un `data/mandate.json` o `data/negotiations.json` de una corrida
-anterior, el panel los precarga al abrir la página. Un mandato nuevo
-(`set_negotiation_mandate`) limpia las negociaciones viejas.
-
----
-
-## Guion para probar (decilo en inglés, sos el jurado)
-
-> "Hi Volta. I need to move a container from the Port of Manzanillo to a
-> warehouse in Guadalajara. Container number MSCU1234567."
-
-> "Pickup has to be on September 3rd, any time between 8 in the morning and 6 pm."
-
-> "I won't accept prepayment, and the load has to be insured."
-
-> "The most I can pay is 9,000 pesos. Don't go over that."
-
-Volta debería: repetir la ventana en ISO para confirmar, llamar a
-`set_negotiation_mandate` con `maxPriceMxn: 9000`, confirmar el brief en una
-frase y cerrar.
-
-Probá también:
-
-- **Precio ambiguo:** "somewhere between 8 and 10 thousand" → Volta toma 10,000
-  como tope y lo dice.
-- **Sin precio:** no menciones plata → Volta te lo pregunta directo y no guarda
-  nada hasta tener un número.
-- **Barge-in:** interrumpilo a mitad de frase → corta y te escucha.
-
----
-
-## Endpoints (debug)
-
-| Método | Ruta           | Qué devuelve                            |
-| ------- | -------------- | ---------------------------------------- |
-| GET     | `/mandate`      | el último mandato capturado (o`null`)                              |
-| GET     | `/negotiations` | array de negociaciones con carriers (ofertas, condiciones, decisión) |
-| GET     | `/calls/:id`    | estado + log completo de una llamada                                 |
+Los webhooks verifican la firma `X-Twilio-Signature`. Para pegarles con `curl`,
+poné `TWILIO_VALIDATE_SIGNATURE=0`.
 
 ---
 
 ## Problemas comunes
 
-| Síntoma                                | Causa / arreglo                                                                   |
-| --------------------------------------- | --------------------------------------------------------------------------------- |
-| `beta_api_shape_disabled` en el panel | tu cuenta/modelo no tiene Realtime GA. Usá`gpt-realtime`.                      |
-| Volta se auto-interrumpe                | poné auriculares. Si sigue: subí`threshold` a `0.8` en `src/realtime.ts`. |
-| Te corta antes de terminar la frase     | subí`silence_duration_ms` a `1000` en `src/realtime.ts`.                   |
-| Toma mucho ruido de ambiente            | `noise_reduction: { type: "far_field" }` si hablás lejos del mic.              |
-| No se escucha nada                      | revisá permisos de micrófono y que el navegador no esté en mute.               |
-
----
-
-## Archivos
-
-| Archivo                                                   | Rol                                                                                 |
-| --------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `public/index.html`                                     | Cliente: captura mic, reproduce, panel de mandato + tools.                          |
-| `src/server.ts`                                         | Sirve la UI + WS que puentea navegador ↔ OpenAI.`GET /mandate`.                  |
-| `src/realtime.ts`                                       | Bridge con OpenAI Realtime (GA, PCM16 24 kHz) + eventos a la UI.                    |
-| `src/prompt.ts`                                         | Instrucciones de Volta:`buildIntakeInstructions()` (jurado).                      |
-| `src/tools.ts`                                          | Tools del intake:`set_negotiation_mandate`, `record_call_note`, `end_intake`. |
-| `src/mandateStore.ts`                                   | Persiste el mandato en`data/mandate.json`.                                        |
-| `src/negotiationStore.ts`                               | Estado de la negociación con carriers (ofertas, condiciones, demoras, decisión) en`data/negotiations.json`. |
-| `src/mandate.ts`                                        | Motor de validación (se usa en la fase de negociación).                           |
-| `src/store.ts` · `src/types.ts` · `src/config.ts` | Estado, tipos, config.                                                              |
-
----
-
-## Qué sigue
-
-- **Fase 2:** 3 proveedores simulados (cada uno su API key + personalidad: uno
-  caro, uno regateador, uno que baja a algo razonable). Volta negocia contra el
-  precio guardado. El flujo de negociación ya está parkeado en el código
-  (`mode: "negotiate"`, `src/prompt.ts` → `buildInstructions`, tools
-  `check_mandate` / `propose_commitment`).
-- **Fase 3:** comparador de las 3 negociaciones + escalación.
+| Síntoma                                    | Causa / arreglo                                                                 |
+| ------------------------------------------ | ------------------------------------------------------------------------------- |
+| "We're sorry, an application error has occurred" | Twilio no llegó al webhook (error 11200). Casi siempre **ngrok se cayó**: la barra del dashboard lo dice ("túnel caído"). Levantalo con el dominio fijo:<br>`ngrok http 3000 --url=https://TU-DOMINIO.ngrok-free.dev`<br>Si el dominio cambió, corré `npm run setup:twilio` para reapuntar el número. |
+| Error 21215 al llamar al carrier           | País bloqueado en Voice → Geographic Permissions. `GET /twilio/geo?to=+52…`.     |
+| `invalid signature` en el log              | `PUBLIC_URL` no coincide con la URL real del webhook.                            |
+| Volta habla encima del carrier             | Subí `threshold` en `turnDetection()` de `src/realtime.ts`.                      |
+| Te interrumpe apenas hacés una pausa       | Subí `silence_duration_ms` en el mismo lugar.                                    |
+| Corta la última frase                      | El `mark` no volvió: revisá el log de `/twilio/media`.                           |
+| `beta_api_shape_disabled`                  | Tu cuenta no tiene Realtime GA. Usá `gpt-realtime`.                              |

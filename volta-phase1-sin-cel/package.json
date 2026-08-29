@@ -3,14 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Volta Fase 1 SIN teléfono: hablás con el agente Realtime desde el navegador para probar el backend (mandato, tools, compromisos).",
+  "description": "Volta: agente de voz que atiende y hace llamadas reales por Twilio (con fallback por navegador).",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts"
+    "start": "tsx src/server.ts",
+    "setup:twilio": "tsx scripts/setup-twilio.ts",
+    "typecheck": "tsc --noEmit",
+    "test:stream": "node scripts/fake-twilio.mjs"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "twilio": "^6.1.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {

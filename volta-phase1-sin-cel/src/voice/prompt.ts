@@ -4,7 +4,7 @@
 // Las reglas duras se validan igual en código (mandate.ts); el prompt define
 // el comportamiento y el tono.
 // -----------------------------------------------------------------------------
-import type { Mandate } from "./types.js";
+import type { Mandate } from "../types.js";
 
 // -----------------------------------------------------------------------------
 // FASE 0 — INTAKE con el JURADO.

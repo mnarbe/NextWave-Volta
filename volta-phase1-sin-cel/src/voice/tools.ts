@@ -4,16 +4,16 @@
 // el transporte de audio cambió, la lógica de negocio no.
 // -----------------------------------------------------------------------------
 import { randomUUID } from "node:crypto";
-import { getCall, log } from "./store.js";
-import { checkMandate } from "./mandate.js";
-import { saveMandate } from "./mandateStore.js";
+import { getCall, log } from "../store.js";
+import { checkMandate } from "../mandate.js";
+import { saveMandate } from "../storage/mandateStore.js";
 import {
   recordOffer,
   recordRefusal,
   finalizeNegotiation,
   resetNegotiations,
-} from "./negotiationStore.js";
-import type { Mandate, NegotiationMandate, Proposal } from "./types.js";
+} from "../storage/negotiationStore.js";
+import type { Mandate, NegotiationMandate, Proposal } from "../types.js";
 
 // Cuántos días tarde llega el pickup respecto de la ventana pedida por el
 // cliente. 0 = dentro de la ventana. undefined = no hay ventana firme o no se
