@@ -1,10 +1,14 @@
 // -----------------------------------------------------------------------------
 // realtime.ts
-// Puente con la OpenAI Realtime API. Casi idéntico a la versión con teléfono,
-// con DOS diferencias:
-//   1) Audio en PCM16 24kHz (lo que pide OpenAI) en vez de μ-law 8kHz de Twilio.
-//   2) Un callback onEvent() que reenvía transcripts y tool calls al navegador,
-//      para que VEAS en vivo cómo el backend recibe y procesa los datos.
+// Puente con la OpenAI Realtime API, AGNÓSTICO DEL TRANSPORTE.
+//
+// El mismo bridge sirve para:
+//   - navegador  -> PCM16 24kHz  (audioFormat: "pcm24")
+//   - teléfono   -> G.711 μ-law 8kHz (audioFormat: "pcmu")
+//
+// La API GA acepta "audio/pcmu" directamente, así que con Twilio NO hay que
+// transcodificar nada: el base64 de Twilio entra tal cual y la respuesta sale
+// tal cual. Lo único que cambia es este campo de config.
 // -----------------------------------------------------------------------------
 import WebSocket from "ws";
 import { config } from "./config.js";
@@ -12,33 +16,61 @@ import { log, getCall } from "./store.js";
 import { buildInstructions, buildIntakeInstructions } from "./prompt.js";
 import { toolDefinitions, intakeToolDefinitions, runTool } from "./tools.js";
 
-// "intake" = Volta habla con el JURADO para capturar el mandato.
-// "negotiate" = Volta negocia con un transportista (fase siguiente).
+// "intake" = Volta captura el mandato del cliente/jurado.
+// "negotiate" = Volta negocia con un transportista.
 export type Phase = "intake" | "negotiate";
 
-type Callbacks = {
-  // Audio (base64 PCM16) de Volta -> navegador para reproducir.
+// "pcm24" = PCM16 24kHz (navegador). "pcmu" = G.711 μ-law 8kHz (teléfono).
+export type AudioFormat = "pcm24" | "pcmu";
+
+export type Callbacks = {
+  // Audio (base64) de Volta -> transporte (parlantes del navegador o llamada).
   sendAudio: (base64: string) => void;
-  // Pedirle al navegador que corte el audio en curso (barge-in).
+  // Cortar el audio en curso (barge-in).
   clearAudio: () => void;
-  // Eventos "de negocio" para mostrar en la UI (transcripts, tools, etc.).
+  // Eventos "de negocio" para la UI / el log.
   onEvent: (kind: string, data: unknown) => void;
+  // Cuántos ms del audio del agente se escucharon REALMENTE. Solo el transporte
+  // lo sabe (el navegador por su cola; Twilio por media.timestamp). Se usa para
+  // truncar el item en OpenAI y que el modelo no crea que dijo lo que se cortó.
+  playedMs?: () => number;
+  // Primer delta de audio de una respuesta: el transporte marca el t0 de reproducción.
+  onResponseStart?: (itemId: string) => void;
 };
+
+export type BridgeOptions = {
+  callId: string;
+  cb: Callbacks;
+  phase?: Phase;
+  audioFormat?: AudioFormat;
+};
+
+// La API GA pide "rate" para PCM y NO lo acepta para μ-law (8kHz implícito).
+function formatFor(audioFormat: AudioFormat) {
+  return audioFormat === "pcmu"
+    ? { type: "audio/pcmu" }
+    : { type: "audio/pcm", rate: 24000 };
+}
 
 export class RealtimeBridge {
   private ws: WebSocket;
   private callId: string;
   private cb: Callbacks;
   private phase: Phase;
+  private audioFormat: AudioFormat;
   private ready = false;
   // ¿Hay una respuesta del modelo en curso? Solo entonces tiene sentido
   // mandar response.cancel (la API GA tira error si no hay ninguna activa).
   private responseActive = false;
+  // Item de audio que se está reproduciendo: lo necesitamos para truncarlo.
+  private currentItemId: string | null = null;
+  private sawFirstDelta = false;
 
-  constructor(callId: string, cb: Callbacks, phase: Phase = "intake") {
-    this.callId = callId;
-    this.cb = cb;
-    this.phase = phase;
+  constructor(opts: BridgeOptions) {
+    this.callId = opts.callId;
+    this.cb = opts.cb;
+    this.phase = opts.phase ?? "intake";
+    this.audioFormat = opts.audioFormat ?? "pcm24";
 
     // API GA: sin el header "OpenAI-Beta". El modelo va en la query y también
     // dentro de session.update (abajo).
@@ -67,6 +99,7 @@ export class RealtimeBridge {
         ? buildIntakeInstructions()
         : buildInstructions(call.mandate);
     const tools = isIntake ? intakeToolDefinitions : toolDefinitions;
+    const format = formatFor(this.audioFormat);
 
     this.send({
       type: "session.update",
@@ -78,23 +111,22 @@ export class RealtimeBridge {
         output_modalities: ["audio"],
         audio: {
           input: {
-            // <-- diferencia con teléfono: PCM16 24kHz en ambos lados.
-            format: { type: "audio/pcm", rate: 24000 },
+            format,
             // Supresión de ruido de OpenAI antes del VAD. "near_field" = mic
-            // cercano (auriculares/headset); usá "far_field" si hablás lejos.
+            // cercano: vale tanto para auriculares como para un teléfono.
             noise_reduction: { type: "near_field" },
             turn_detection: {
               type: "server_vad",
-              // Más alto = menos sensible: ignora ruido de ambiente y voces bajas.
-              threshold: 0.7,
+              // El audio telefónico es de banda angosta y más comprimido: con
+              // el umbral alto del navegador (0.7) se come turnos enteros.
+              threshold: this.audioFormat === "pcmu" ? 0.5 : 0.7,
               prefix_padding_ms: 300,
-              // Espera más silencio antes de dar por terminado tu turno.
-              silence_duration_ms: 800,
+              silence_duration_ms: this.audioFormat === "pcmu" ? 700 : 800,
             },
             transcription: { model: "gpt-4o-mini-transcribe" },
           },
           output: {
-            format: { type: "audio/pcm", rate: 24000 },
+            format,
             voice: "alloy",
           },
         },
@@ -119,10 +151,10 @@ export class RealtimeBridge {
     });
   }
 
-  // Audio entrante desde el navegador -> OpenAI.
-  public appendAudio(base64Pcm16: string) {
+  // Audio entrante desde el transporte -> OpenAI.
+  public appendAudio(base64Audio: string) {
     if (!this.ready) return;
-    this.send({ type: "input_audio_buffer.append", audio: base64Pcm16 });
+    this.send({ type: "input_audio_buffer.append", audio: base64Audio });
   }
 
   private onMessage(raw: WebSocket.RawData) {
@@ -137,29 +169,51 @@ export class RealtimeBridge {
       // Marcamos inicio/fin de respuesta para saber si podemos cancelarla.
       case "response.created":
         this.responseActive = true;
+        this.sawFirstDelta = false;
         break;
 
       case "response.done":
         this.responseActive = false;
+        this.currentItemId = null;
         break;
 
       // API GA: response.audio.delta -> response.output_audio.delta
       case "response.output_audio.delta":
-        if (evt.delta) this.cb.sendAudio(evt.delta);
+        if (!evt.delta) break;
+        this.currentItemId = evt.item_id ?? this.currentItemId;
+        if (!this.sawFirstDelta) {
+          this.sawFirstDelta = true;
+          if (this.currentItemId) this.cb.onResponseStart?.(this.currentItemId);
+        }
+        this.cb.sendAudio(evt.delta);
         break;
 
-      // Barge-in: la persona empezó a hablar. Siempre limpiamos el audio en
-      // cola del navegador; solo cancelamos en el servidor si hay una respuesta
-      // en curso (si no, la API GA responde con response_cancel_not_active).
-      case "input_audio_buffer.speech_started":
+      // Barge-in: la persona empezó a hablar.
+      //   1) el transporte tira lo que tenga en cola,
+      //   2) truncamos el item en OpenAI hasta lo que REALMENTE se escuchó
+      //      (si no, el modelo cree que dijo el final que nadie oyó),
+      //   3) cancelamos la respuesta en curso.
+      case "input_audio_buffer.speech_started": {
         this.cb.clearAudio();
-        if (this.responseActive) {
-          log(this.callId, "barge_in", {});
-          this.cb.onEvent("barge_in", {});
-          this.send({ type: "response.cancel" });
-          this.responseActive = false;
+        if (!this.responseActive) break;
+
+        const played = Math.max(0, Math.round(this.cb.playedMs?.() ?? 0));
+        log(this.callId, "barge_in", { playedMs: played, itemId: this.currentItemId });
+        this.cb.onEvent("barge_in", { playedMs: played });
+
+        if (this.currentItemId && played > 0) {
+          this.send({
+            type: "conversation.item.truncate",
+            item_id: this.currentItemId,
+            content_index: 0,
+            audio_end_ms: played,
+          });
         }
+        this.send({ type: "response.cancel" });
+        this.responseActive = false;
+        this.currentItemId = null;
         break;
+      }
 
       case "conversation.item.input_audio_transcription.completed":
         log(this.callId, "user_transcript", evt.transcript);
@@ -178,10 +232,12 @@ export class RealtimeBridge {
 
       case "error": {
         const err = evt.error || evt;
-        // "response_cancel_not_active": el response terminó justo antes de que
-        // llegara nuestro response.cancel del barge-in. Es benigno: lo ignoramos
-        // para no ensuciar la UI con un error rojo.
-        if (err?.code === "response_cancel_not_active") {
+        // Benignos: el response terminó justo antes de que llegara nuestro
+        // cancel/truncate del barge-in. No los mostramos como error rojo.
+        if (
+          err?.code === "response_cancel_not_active" ||
+          err?.code === "item_truncate_invalid_audio_end_ms"
+        ) {
           this.responseActive = false;
           break;
         }
@@ -216,7 +272,7 @@ export class RealtimeBridge {
       this.cb.onEvent("mandate_captured", mandate);
     }
 
-    // Negativa del carrier a bajar -> evento para el contador en la UI.
+    // El transportista se negó: la UI lleva la cuenta de negativas.
     if (evt.name === "note_carrier_refusal") {
       log(this.callId, "carrier_refusal", result);
       this.cb.onEvent("carrier_refusal", result);

@@ -1,11 +1,16 @@
 // -----------------------------------------------------------------------------
 // server.ts
-// Sin Twilio. Dos responsabilidades:
-//   1) Servir la página de prueba (public/index.html).
-//   2) WebSocket /ws: el navegador manda el audio del micrófono por acá; lo
-//      puenteamos con OpenAI Realtime y devolvemos el audio + los eventos.
+// Tres responsabilidades:
+//   1) Servir la UI de prueba (public/index.html) — el fallback sin teléfono.
+//   2) Rutas de Twilio (si está configurado): TwiML entrante/saliente + estado.
+//   3) Enrutar los upgrades de WebSocket:
+//        /ws            -> navegador (PCM16 24kHz)
+//        /twilio/media  -> Twilio Media Streams (μ-law 8kHz)
 //
-// El navegador reemplaza al teléfono: mic -> /ws -> OpenAI -> /ws -> parlantes.
+// OJO con los WebSocketServer: en ws 8.x, dos instancias creadas con
+// { server, path } sobre el MISMO http.Server se pisan — cada una engancha su
+// propio listener de "upgrade" y aborta con 400 los paths que no son suyos.
+// Por eso van con { noServer: true } y un único router de upgrade acá abajo.
 // -----------------------------------------------------------------------------
 import express from "express";
 import { WebSocketServer } from "ws";
@@ -17,14 +22,26 @@ import { config } from "./config.js";
 import { createCall, getCall } from "./store.js";
 import { RealtimeBridge } from "./realtime.js";
 import { getMandate } from "./mandateStore.js";
-import type { Mandate, NegotiationMandate } from "./types.js";
+import { negotiationMandate } from "./mandate.js";
+import { twilioRouter, MEDIA_PATH } from "./twilio/routes.js";
+import { handleTwilioStream } from "./twilio/mediaStream.js";
+import type { Mandate } from "./types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 app.use(express.json());
-// Servimos la UI de prueba desde /public.
 app.use(express.static(path.join(__dirname, "..", "public")));
+
+// Rutas de teléfono. Solo si hay credenciales: sin ellas el server igual sirve
+// la UI del navegador.
+if (config.twilioEnabled) {
+  app.use(twilioRouter());
+} else {
+  console.warn(
+    "[twilio] deshabilitado (faltan variables en .env). Solo modo navegador."
+  );
+}
 
 // Endpoint para inspeccionar el estado/log de una llamada (útil para depurar).
 app.get("/calls/:id", (req, res) => {
@@ -33,52 +50,40 @@ app.get("/calls/:id", (req, res) => {
   res.json(call);
 });
 
-// El mandato capturado del jurado (persistido en data/mandate.json). Las fases
-// siguientes (negociación con proveedores) lo leen de acá.
+// El mandato capturado del cliente (persistido en data/mandate.json).
 app.get("/mandate", (_req, res) => {
   res.json(getMandate());
 });
 
-// Mandato por defecto para la fase de NEGOCIACIÓN con transportista (mode:
-// "negotiate"). En la fase de intake (default) NO se usa: el mandato lo captura
-// Volta hablando con el jurado.
-const DEFAULT_MANDATE: Mandate = {
-  origin: "Port of Manzanillo",
-  destination: "Warehouse in Guadalajara",
-  containerNumber: "MSCU1234567",
-  maxPriceMxn: 9000,
-  pickupWindowStart: "2026-09-03T08:00",
-  pickupWindowEnd: "2026-09-03T18:00",
-  forbiddenConditions: ["prepayment", "no insurance"],
-};
-
-// Ventana "abierta": si el jurado no dio fechas, no queremos que checkMandate
-// rechace por horario. Solo el precio es límite duro.
-const OPEN_WINDOW_START = "2000-01-01T00:00";
-const OPEN_WINDOW_END = "2100-01-01T00:00";
-
-// El mandato capturado del jurado (NegotiationMandate) -> el shape que usa la
-// fase de negociación (Mandate), completando lo que falte.
-function toNegotiationMandate(m: NegotiationMandate): Mandate {
-  return {
-    origin: m.origin || "(origin not specified)",
-    destination: m.destination || "(destination not specified)",
-    containerNumber: m.containerNumber,
-    maxPriceMxn: m.maxPriceMxn,
-    pickupWindowStart: m.pickupWindowStart || OPEN_WINDOW_START,
-    pickupWindowEnd: m.pickupWindowEnd || OPEN_WINDOW_END,
-    forbiddenConditions: m.forbiddenConditions || [],
-  };
-}
-
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: "/ws" });
 
-wss.on("connection", (browserWs) => {
+// --- WebSockets --------------------------------------------------------------
+const browserWss = new WebSocketServer({ noServer: true });
+const twilioWss = new WebSocketServer({ noServer: true });
+
+server.on("upgrade", (req, socket, head) => {
+  const { pathname } = new URL(req.url || "/", `http://${req.headers.host}`);
+
+  if (pathname === "/ws") {
+    browserWss.handleUpgrade(req, socket, head, (ws) =>
+      browserWss.emit("connection", ws, req)
+    );
+  } else if (pathname === MEDIA_PATH) {
+    twilioWss.handleUpgrade(req, socket, head, (ws) =>
+      twilioWss.emit("connection", ws, req)
+    );
+  } else {
+    socket.destroy();
+  }
+});
+
+twilioWss.on("connection", (ws) => handleTwilioStream(ws));
+
+// --- Navegador: el transporte de respaldo ------------------------------------
+browserWss.on("connection", (browserWs) => {
   let bridge: RealtimeBridge | null = null;
   let callId = "";
 
-  // Helper: mandar un mensaje JSON al navegador.
   const toBrowser = (obj: unknown) => {
     if (browserWs.readyState === browserWs.OPEN) browserWs.send(JSON.stringify(obj));
   };
@@ -93,33 +98,33 @@ wss.on("connection", (browserWs) => {
 
     switch (msg.type) {
       // El navegador pide arrancar la "llamada".
-      //   mode "intake" (default): Volta habla con el jurado, sin mandato previo.
-      //   mode "negotiate": Volta negocia con transportista usando un mandato.
+      //   mode "intake" (default): Volta habla con el cliente, sin mandato previo.
+      //   mode "negotiate": Volta negocia usando el mandato capturado (o el default).
       case "start": {
         const mode = msg.mode === "negotiate" ? "negotiate" : "intake";
-        let mandate: Mandate | null = null;
-        if (mode === "negotiate") {
-          const captured = getMandate();
-          mandate = msg.mandate
-            ? msg.mandate
-            : captured
-              ? toNegotiationMandate(captured)
-              : DEFAULT_MANDATE;
-        }
+        const mandate: Mandate | null =
+          mode === "negotiate"
+            ? msg.mandate || negotiationMandate(getMandate()).mandate
+            : null;
         callId = createCall(mandate);
 
-        bridge = new RealtimeBridge(
+        bridge = new RealtimeBridge({
           callId,
-          {
-            // Audio de Volta -> navegador.
+          phase: mode,
+          audioFormat: "pcm24",
+          cb: {
             sendAudio: (base64) => toBrowser({ type: "audio", audio: base64 }),
-            // Barge-in -> el navegador limpia su cola de reproducción.
             clearAudio: () => toBrowser({ type: "clear" }),
-            // Eventos "de negocio" -> panel de la UI.
+            // Acá NO sabemos cuánto se escuchó realmente: el modelo genera más
+            // rápido que tiempo real, así que lo encolado supera de lejos a lo
+            // reproducido y truncar con ese número sería peor que no truncar.
+            // Devolviendo 0 el bridge no trunca y el navegador se comporta como
+            // siempre. Para que también trunque, index.html tendría que reportar
+            // la posición real de su AudioContext.
+            playedMs: () => 0,
             onEvent: (kind, data) => toBrowser({ type: "event", kind, data }),
           },
-          mode
-        );
+        });
 
         toBrowser({ type: "started", callId, mode, mandate });
         break;
@@ -144,6 +149,10 @@ wss.on("connection", (browserWs) => {
 });
 
 server.listen(config.port, () => {
-  console.log(`Volta (sin celular) escuchando en http://localhost:${config.port}`);
-  console.log(`Abrí esa URL en el navegador, permití el micrófono y apretá "Start".`);
+  console.log(`Volta escuchando en http://localhost:${config.port}`);
+  console.log(`  navegador: abrí esa URL, permití el micrófono y apretá "Start".`);
+  if (config.twilioEnabled) {
+    console.log(`  teléfono:  entrante -> POST ${config.twilio.publicBaseUrl}/twilio/inbound`);
+    console.log(`             saliente -> POST http://localhost:${config.port}/calls/outbound {"to":"+52..."}`);
+  }
 });

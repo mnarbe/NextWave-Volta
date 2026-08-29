@@ -3,14 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Volta Fase 1 SIN teléfono: hablás con el agente Realtime desde el navegador para probar el backend (mandato, tools, compromisos).",
+  "description": "Volta: agente de voz que negocia drayage por tel\u00e9fono (Twilio + OpenAI Realtime), con mandato validado en servidor.",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts"
+    "start": "tsx src/server.ts",
+    "check:pcmu": "tsx scripts/check-pcmu.ts",
+    "test": "tsx src/_mandate.test.ts",
+    "test:live": "tsx src/_twilio.test.ts && tsx src/_browser.test.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "twilio": "^6.1.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {

@@ -4,7 +4,7 @@
 // el transporte de audio cambió, la lógica de negocio no.
 // -----------------------------------------------------------------------------
 import { randomUUID } from "node:crypto";
-import { getCall, log } from "./store.js";
+import { getCall, log, audioMsOf } from "./store.js";
 import { checkMandate } from "./mandate.js";
 import { saveMandate } from "./mandateStore.js";
 import type { NegotiationMandate, Proposal } from "./types.js";
@@ -272,15 +272,24 @@ export async function runTool(
         conditions: proposal.conditions || [],
         agreedByName: args.agreedByName,
         createdAt: new Date().toISOString(),
+        // Ancla de auditoría: el segundo del audio en el que se cerró.
+        agreedAtAudioMs: audioMsOf(callId),
       };
       call.commitments.push(commitment);
-      // TODO (Fase 2): send_recap + timestamp de audio antes de contar como verificado.
-      result = { committed: true, commitmentId: commitment.id };
+      // TODO (Fase siguiente): send_recap antes de contar como verificado.
+      result = {
+        committed: true,
+        commitmentId: commitment.id,
+        agreedAtAudioMs: commitment.agreedAtAudioMs,
+      };
       break;
     }
 
     case "record_call_note": {
-      log(callId, "tool_result", { note: args.note });
+      // kind propio: antes se logueaba como "tool_result" y las notas quedaban
+      // indistinguibles del output de cualquier otra tool (y duplicadas, porque
+      // handleFunctionCall ya loguea tool_result).
+      log(callId, "note", { note: args.note });
       result = { ok: true };
       break;
     }

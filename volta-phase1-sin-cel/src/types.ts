@@ -53,12 +53,17 @@ export type Commitment = {
   conditions: string[];
   agreedByName?: string;
   createdAt: string;
-  // TODO (Fase 2): recapMessageId, agreedAtAudioMs, status verificado.
+  // Momento exacto del audio de la llamada en el que se cerró el compromiso.
+  // Con esto un auditor abre data/audio/<callId>/in.wav y salta al segundo.
+  agreedAtAudioMs?: number;
+  // TODO (Fase siguiente): recapMessageId + status verificado por recap.
 };
 
 export type LogEntry = {
   ts: string;
   callId: string;
+  // ms desde el inicio del audio de la llamada (si el transporte lleva reloj).
+  audioMs?: number;
   kind:
     | "call_started"
     | "call_ended"
@@ -71,6 +76,9 @@ export type LogEntry = {
     | "intake_done"
     | "carrier_refusal"
     | "negotiation_done"
+    | "call_status"
+    | "dtmf"
+    | "note"
     | "error";
   data: unknown;
 };
