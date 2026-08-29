@@ -1,12 +1,12 @@
 {
-  "name": "volta-phase1-sin-cel",
+  "name": "volta-negotiator",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Volta Fase 1 SIN teléfono: hablás con el agente Realtime desde el navegador para probar el backend (mandato, tools, compromisos).",
+  "description": "Volta: browser-based Realtime voice agent that captures a freight mandate from the client and negotiates it with carriers.",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts"
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

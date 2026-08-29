@@ -1,9 +1,9 @@
 // -----------------------------------------------------------------------------
-// store.ts
-// Estado en memoria + logging a consola. Igual que la versión con teléfono.
+// store/calls.ts
+// In-memory state + console logging. Same as the phone version.
 // -----------------------------------------------------------------------------
 import { randomUUID } from "node:crypto";
-import type { CallState, Mandate, LogEntry } from "./types.js";
+import type { CallState, Mandate, LogEntry } from "../domain/types.js";
 
 const calls = new Map<string, CallState>();
 

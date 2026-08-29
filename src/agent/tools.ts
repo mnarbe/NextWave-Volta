@@ -1,37 +1,19 @@
 // -----------------------------------------------------------------------------
-// tools.ts
-// Las 3 tools de Fase 1 y su ejecución. Idéntico a la versión con teléfono:
-// el transporte de audio cambió, la lógica de negocio no.
+// agent/tools.ts
+// The tool definitions and their execution. Same as the phone version: the audio
+// transport changed, the business logic did not.
 // -----------------------------------------------------------------------------
 import { randomUUID } from "node:crypto";
-import { getCall, log } from "./store.js";
-import { checkMandate } from "./mandate.js";
-import { saveMandate } from "./mandateStore.js";
+import { getCall, log } from "../store/calls.js";
+import { checkMandate, computeDelayDays } from "../domain/mandate.js";
+import { saveMandate } from "../store/mandates.js";
 import {
   recordOffer,
   recordRefusal,
   finalizeNegotiation,
   resetNegotiations,
-} from "./negotiationStore.js";
-import type { Mandate, NegotiationMandate, Proposal } from "./types.js";
-
-// Cuántos días tarde llega el pickup respecto de la ventana pedida por el
-// cliente. 0 = dentro de la ventana. undefined = no hay ventana firme o no se
-// pudo parsear. Lo calculamos en código para no depender del modelo.
-function computeDelayDays(
-  mandate: Mandate | null,
-  pickupTime?: string
-): number | undefined {
-  if (!mandate || !pickupTime || !mandate.pickupWindowEnd) return undefined;
-  const endYear = Number(mandate.pickupWindowEnd.slice(0, 4));
-  if (!Number.isFinite(endYear) || endYear >= 2100) return undefined; // ventana "abierta"
-  const t = Date.parse(pickupTime);
-  const end = Date.parse(mandate.pickupWindowEnd);
-  if (Number.isNaN(t) || Number.isNaN(end)) return undefined;
-  const diff = t - end;
-  if (diff <= 0) return 0;
-  return Math.ceil(diff / 86_400_000);
-}
+} from "../store/negotiations.js";
+import type { NegotiationMandate, Proposal } from "../domain/types.js";
 
 function num(v: unknown): number | undefined {
   const n = Number(v);
@@ -43,7 +25,7 @@ function strArray(v: unknown): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// FASE 0 — tools del INTAKE con el jurado.
+// PHASE 0 — INTAKE tools (talking to the client).
 // ---------------------------------------------------------------------------
 export const intakeToolDefinitions = [
   {
@@ -108,7 +90,7 @@ export const intakeToolDefinitions = [
   },
 ] as const;
 
-// Esquema para la Realtime API.
+// PHASE 1 — carrier negotiation tools. Schema for the Realtime API.
 export const toolDefinitions = [
   {
     type: "function",
@@ -284,7 +266,7 @@ export async function runTool(
   let result: Record<string, unknown>;
 
   switch (name) {
-    // --- FASE 0: intake con el jurado -------------------------------------
+    // --- PHASE 0: intake with the client ----------------------------------
     case "set_negotiation_mandate": {
       const max = Number(args.maxPriceMxn);
       if (!Number.isFinite(max) || max <= 0) {
@@ -306,7 +288,7 @@ export async function runTool(
         capturedAt: new Date().toISOString(),
       };
       saveMandate(mandate);
-      // Trabajo nuevo: limpiamos las negociaciones con carriers de la corrida anterior.
+      // New job: clear the carrier negotiations from the previous run.
       resetNegotiations();
       result = { saved: true, mandate };
       break;
@@ -317,7 +299,7 @@ export async function runTool(
       break;
     }
 
-    // --- FASE 1: negociación con el carrier -------------------------------
+    // --- PHASE 1: negotiation with the carrier ----------------------------
     case "log_carrier_offer": {
       const pickupTime = args.pickupTime || undefined;
       const carrier = recordOffer(callId, args.carrierName, {
@@ -383,7 +365,7 @@ export async function runTool(
         result = { error: "no_mandate_loaded" };
         break;
       }
-      // Revalidamos en código aunque el modelo diga que ya lo chequeó.
+      // Re-validate in code even if the model claims it already checked.
       const proposal: Proposal = {
         priceMxn: args.priceMxn,
         pickupTime: args.pickupTime,
@@ -404,16 +386,16 @@ export async function runTool(
         createdAt: new Date().toISOString(),
       };
       call.commitments.push(commitment);
-      // Reflejamos el compromiso en el registro de negociación (dashboard).
+      // Mirror the commitment into the negotiation record (dashboard).
       recordOffer(callId, args.agreedByName, {
         ts: commitment.createdAt,
         priceMxn: commitment.priceMxn,
         pickupTime: commitment.pickupTime,
         pickupDelayDays: computeDelayDays(call.mandate, commitment.pickupTime),
         conditions: commitment.conditions,
-        note: "compromiso validado por check_mandate",
+        note: "commitment validated by check_mandate",
       });
-      // TODO (Fase 2): send_recap + timestamp de audio antes de contar como verificado.
+      // TODO (Phase 2): send_recap + audio timestamp before counting as verified.
       result = { committed: true, commitmentId: commitment.id };
       break;
     }

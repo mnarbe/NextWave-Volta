@@ -1,12 +1,12 @@
 // -----------------------------------------------------------------------------
 // config.ts
-// Sin Twilio: solo necesitamos la API key de OpenAI y el puerto.
+// No Twilio: all we need is the OpenAI API key and the port.
 // -----------------------------------------------------------------------------
 import "dotenv/config";
 
 function required(name: string): string {
   const value = process.env[name];
-  if (!value) throw new Error(`Falta la variable de entorno ${name}. Revisá tu .env`);
+  if (!value) throw new Error(`Missing environment variable ${name}. Check your .env`);
   return value;
 }
 
