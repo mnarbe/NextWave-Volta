@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Volta — control tower</title>
+<!--
+  Structure only. Styles live in styles.css and behaviour in js/. If you add an
+  element the JS has to touch, give it an id and add it to the `ui` object at
+  the top of js/render.js.
+-->
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <span id="dot" class="dot"></span>
+    <h1>Volta</h1>
+    <span id="phaseChip" class="chip" hidden></span>
+    <span id="hintEl" class="hint">Call Volta's number to hand over the job.</span>
+    <span class="spacer"></span>
+    <button id="startBtn">🎙 Browser mode</button>
+    <button id="stopBtn" disabled>Stop</button>
+    <button id="forceCutBtn" hidden>End intake →</button>
+  </header>
+
+  <div id="phoneBar" class="phonebar">
+    <span id="phoneNum" class="phone-num">phone: —</span>
+    <span id="phoneState" class="phone-state">no call</span>
+    <span class="spacer"></span>
+    <input id="carrierNum" class="tel" placeholder="+52 55 1234 5678" autocomplete="off" />
+    <input id="carrierName" class="tel name" placeholder="carrier (optional)" autocomplete="off" />
+    <button id="callBtn" class="primary" disabled>📞 Call the carrier</button>
+    <button id="hangBtn" hidden>Hang up</button>
+  </div>
+
+  <!-- Simulated inbound call: only shows up in browser mode. -->
+  <div id="incoming" class="incoming" hidden>
+    <span class="ring">📞 Volta is calling you…</span>
+    <button id="answerBtn" class="primary">Answer</button>
+    <span class="hint">You are the carrier now. Name your price and haggle.</span>
+  </div>
+
+  <main>
+    <section>
+      <h2>Conversation</h2>
+      <div id="convo"></div>
+    </section>
+
+    <section>
+      <h2>Client brief</h2>
+      <div id="mandateCard" class="mandate empty">
+        <div class="price"><span id="mPrice">—</span><span class="cur">MXN</span></div>
+        <div class="price-label">maximum price</div>
+        <dl id="mFields"></dl>
+        <div id="mStatus" class="status">Waiting for Volta to capture it…</div>
+      </div>
+
+      <h2>Final decision</h2>
+      <div id="decision" class="hint">No negotiation has closed yet.</div>
+
+      <h2>Carrier negotiation</h2>
+      <div id="carriers" class="hint">No carrier call yet.</div>
+
+      <h2>Backend activity</h2>
+      <div id="tools"></div>
+    </section>
+  </main>
+
+  <script type="module" src="js/client.js"></script>
+</body>
+</html>
