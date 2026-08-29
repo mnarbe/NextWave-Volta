@@ -61,6 +61,16 @@
   .mandate dd { margin: 0; color: #dfe3ea; word-break: break-word; }
   .mandate .status { margin-top: 12px; font-size: 12px; color: #8a90a0; }
   .mandate .status.done { color: #57d98a; }
+  .chip { font-size: 11px; font-weight: 600; text-transform: uppercase;
+          letter-spacing: .06em; padding: 3px 9px; border-radius: 20px;
+          background: #1b2537; color: #7fb4ff; border: 1px solid #2b3040; }
+  .chip.negotiate { background: #1c2620; color: #57d98a; }
+  .incoming { display: flex; align-items: center; gap: 14px;
+              padding: 12px 20px; background: #14202f;
+              border-bottom: 1px solid #2f6fed; }
+  .incoming .ring { font-size: 14px; font-weight: 600; color: #cfe0ff;
+                    animation: pulse 1.1s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .45 } }
 </style>
 </head>
 <body>
@@ -69,8 +79,15 @@
     <h1>Volta — prueba sin celular</h1>
     <button id="startBtn" class="primary">Start</button>
     <button id="stopBtn" disabled>Stop</button>
-    <span class="hint">Fase 0 — intake. Sos el jurado: encargale el transporte a Volta en inglés. Usá auriculares.</span>
+    <button id="forceCutBtn" hidden>Cortar intake y llamar al carrier →</button>
+    <span id="phaseChip" class="chip" hidden></span>
+    <span id="hintEl" class="hint">Fase 0 — intake. Sos el jurado: encargale el transporte a Volta en inglés. Usá auriculares.</span>
   </header>
+  <div id="incoming" class="incoming" hidden>
+    <span class="ring">📞 Volta te está llamando…</span>
+    <button id="answerBtn" class="primary">Atender</button>
+    <span class="hint">Ahora sos el carrier. Poné tu precio y regateá.</span>
+  </div>
   <main>
     <section>
       <h2>Conversación</h2>
@@ -107,12 +124,34 @@ let scheduled = []; // fuentes de audio agendadas, para cortar en barge-in
 const dot = document.getElementById("dot");
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
+const forceCutBtn = document.getElementById("forceCutBtn");
+const phaseChip = document.getElementById("phaseChip");
+const hintEl = document.getElementById("hintEl");
+const incoming = document.getElementById("incoming");
+const answerBtn = document.getElementById("answerBtn");
 const convo = document.getElementById("convo");
 const toolsEl = document.getElementById("tools");
 const mandateCard = document.getElementById("mandateCard");
 const mPrice = document.getElementById("mPrice");
 const mFields = document.getElementById("mFields");
 const mStatus = document.getElementById("mStatus");
+
+let phase = "idle"; // idle | intake | ringing | negotiate
+
+function setPhase(p) {
+  phase = p;
+  if (p === "intake") {
+    phaseChip.hidden = false; phaseChip.className = "chip";
+    phaseChip.textContent = "intake · jurado";
+    hintEl.textContent = "Sos el jurado. Dale el encargo y el precio máximo.";
+  } else if (p === "negotiate") {
+    phaseChip.hidden = false; phaseChip.className = "chip negotiate";
+    phaseChip.textContent = "negociación · carrier";
+    hintEl.textContent = "Sos el carrier. Volta quiere el precio más bajo; se niega 2 veces y corta.";
+  } else {
+    phaseChip.hidden = true;
+  }
+}
 
 // --- helpers de audio -------------------------------------------------------
 function floatToPCM16(float32) {
@@ -257,6 +296,7 @@ async function start() {
   ws = new WebSocket(`${proto}://${location.host}/ws`);
   ws.onopen = () => {
     ws.send(JSON.stringify({ type: "start", mode: "intake" })); // Fase 0: hablar con el jurado
+    setPhase("intake");
     dot.classList.add("on");
     stopBtn.disabled = false;
   };
@@ -270,17 +310,53 @@ async function start() {
       else if (msg.kind === "mandate_captured") {
         renderMandate(msg.data, { justCaptured: true });
         addTool("tool_result", { name: "mandate_captured", result: msg.data });
+        forceCutBtn.hidden = false; // red de seguridad si Volta no llama end_intake
       } else if (msg.kind === "intake_done") {
-        mStatus.textContent = "Intake completo — Volta cortó la llamada.";
+        forceCutBtn.hidden = true;
+        mStatus.textContent = "Intake completo — Volta cortó con el jurado.";
         mStatus.classList.add("done");
         addMessage("agent", "— fin del intake —");
-        setTimeout(stop, 400);
+        showIncomingCall();
+      } else if (msg.kind === "carrier_refusal") {
+        const n = msg.data && msg.data.refusals;
+        if (n) phaseChip.textContent = `negociación · negativas ${n}/2`;
+        addTool("tool_result", { name: "note_carrier_refusal", result: msg.data });
+      } else if (msg.kind === "negotiation_done") {
+        const outcome = (msg.data && msg.data.outcome) || "no_deal";
+        addMessage("agent", `— fin de la negociación · ${outcome === "deal" ? "trato cerrado" : "sin trato"} —`);
+        setTimeout(stop, 900);
       } else addTool(msg.kind, msg.data);
     } else if (msg.type === "started" && msg.mode === "negotiate") {
       addTool("tool_result", { name: "mandate loaded", result: msg.mandate });
     }
   };
   ws.onclose = () => stop();
+}
+
+// El intake terminó: NO cortamos todo, dejamos el mic + WS vivos y mostramos la
+// "llamada entrante" para que atiendas como carrier.
+function showIncomingCall() {
+  setPhase("ringing");
+  phaseChip.hidden = true;
+  incoming.hidden = false;
+  clearAudio();
+}
+
+function answerCall() {
+  incoming.hidden = true;
+  clearAudio();
+  nextPlayTime = 0;
+  setPhase("negotiate");
+  addMessage("user", "— atendiste la llamada (sos el carrier) —");
+  try { ws && ws.send(JSON.stringify({ type: "start", mode: "negotiate" })); } catch {}
+}
+
+// Corte manual del intake (si Volta no llama end_intake solo).
+function forceCut() {
+  forceCutBtn.hidden = true;
+  try { ws && ws.send(JSON.stringify({ type: "stop" })); } catch {}
+  addMessage("agent", "— intake cortado manualmente —");
+  showIncomingCall();
 }
 
 function stop() {
@@ -295,10 +371,15 @@ function stop() {
   dot.classList.remove("on");
   startBtn.disabled = false;
   stopBtn.disabled = true;
+  forceCutBtn.hidden = true;
+  incoming.hidden = true;
+  setPhase("idle");
 }
 
 startBtn.onclick = () => start().catch((e) => { alert(e.message); stop(); });
 stopBtn.onclick = stop;
+answerBtn.onclick = answerCall;
+forceCutBtn.onclick = forceCut;
 </script>
 </body>
 </html>

@@ -69,6 +69,8 @@ export type LogEntry = {
     | "barge_in"
     | "mandate_captured"
     | "intake_done"
+    | "carrier_refusal"
+    | "negotiation_done"
     | "error";
   data: unknown;
 };
@@ -78,4 +80,5 @@ export type CallState = {
   mandate: Mandate | null; // null en la fase de intake (todavía no se capturó)
   commitments: Commitment[];
   log: LogEntry[];
+  refusals: number; // veces que el carrier se negó a bajar el precio (fase negociación)
 };

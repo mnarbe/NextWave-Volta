@@ -9,7 +9,7 @@ const calls = new Map<string, CallState>();
 
 export function createCall(mandate: Mandate | null = null): string {
   const callId = randomUUID();
-  calls.set(callId, { callId, mandate, commitments: [], log: [] });
+  calls.set(callId, { callId, mandate, commitments: [], log: [], refusals: 0 });
   return callId;
 }
 

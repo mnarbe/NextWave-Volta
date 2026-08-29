@@ -216,6 +216,12 @@ export class RealtimeBridge {
       this.cb.onEvent("mandate_captured", mandate);
     }
 
+    // Negativa del carrier a bajar -> evento para el contador en la UI.
+    if (evt.name === "note_carrier_refusal") {
+      log(this.callId, "carrier_refusal", result);
+      this.cb.onEvent("carrier_refusal", result);
+    }
+
     // Devolvemos el resultado al modelo.
     this.send({
       type: "conversation.item.create",
@@ -226,11 +232,17 @@ export class RealtimeBridge {
       },
     });
 
-    // end_intake: Volta ya dijo su cierre. Cortamos la llamada dando un margen
-    // para que termine de sonar el último audio.
+    // end_intake / end_negotiation: Volta ya dijo su cierre. Cortamos la llamada
+    // dando un margen para que termine de sonar el último audio.
     if (evt.name === "end_intake") {
       log(this.callId, "intake_done", {});
       this.cb.onEvent("intake_done", {});
+      setTimeout(() => this.close(), 3500);
+      return;
+    }
+    if (evt.name === "end_negotiation") {
+      log(this.callId, "negotiation_done", result);
+      this.cb.onEvent("negotiation_done", result);
       setTimeout(() => this.close(), 3500);
       return;
     }

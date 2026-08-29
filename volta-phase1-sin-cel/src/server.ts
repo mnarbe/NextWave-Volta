@@ -17,7 +17,7 @@ import { config } from "./config.js";
 import { createCall, getCall } from "./store.js";
 import { RealtimeBridge } from "./realtime.js";
 import { getMandate } from "./mandateStore.js";
-import type { Mandate } from "./types.js";
+import type { Mandate, NegotiationMandate } from "./types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -52,6 +52,25 @@ const DEFAULT_MANDATE: Mandate = {
   forbiddenConditions: ["prepayment", "no insurance"],
 };
 
+// Ventana "abierta": si el jurado no dio fechas, no queremos que checkMandate
+// rechace por horario. Solo el precio es límite duro.
+const OPEN_WINDOW_START = "2000-01-01T00:00";
+const OPEN_WINDOW_END = "2100-01-01T00:00";
+
+// El mandato capturado del jurado (NegotiationMandate) -> el shape que usa la
+// fase de negociación (Mandate), completando lo que falte.
+function toNegotiationMandate(m: NegotiationMandate): Mandate {
+  return {
+    origin: m.origin || "(origin not specified)",
+    destination: m.destination || "(destination not specified)",
+    containerNumber: m.containerNumber,
+    maxPriceMxn: m.maxPriceMxn,
+    pickupWindowStart: m.pickupWindowStart || OPEN_WINDOW_START,
+    pickupWindowEnd: m.pickupWindowEnd || OPEN_WINDOW_END,
+    forbiddenConditions: m.forbiddenConditions || [],
+  };
+}
+
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
 
@@ -78,8 +97,15 @@ wss.on("connection", (browserWs) => {
       //   mode "negotiate": Volta negocia con transportista usando un mandato.
       case "start": {
         const mode = msg.mode === "negotiate" ? "negotiate" : "intake";
-        const mandate: Mandate | null =
-          mode === "negotiate" ? msg.mandate || DEFAULT_MANDATE : null;
+        let mandate: Mandate | null = null;
+        if (mode === "negotiate") {
+          const captured = getMandate();
+          mandate = msg.mandate
+            ? msg.mandate
+            : captured
+              ? toNegotiationMandate(captured)
+              : DEFAULT_MANDATE;
+        }
         callId = createCall(mandate);
 
         bridge = new RealtimeBridge(

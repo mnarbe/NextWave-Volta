@@ -134,6 +134,43 @@ export const toolDefinitions = [
       required: ["note"],
     },
   },
+  {
+    type: "function",
+    name: "note_carrier_refusal",
+    description:
+      "Call this EVERY time the carrier refuses to lower their price after you " +
+      "asked them to come down (they hold firm or repeat the same number). " +
+      "Returns how many refusals so far and whether you should now close the call.",
+    parameters: {
+      type: "object",
+      properties: {
+        priceMxn: {
+          type: "number",
+          description: "The price the carrier is holding at, in MXN.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    type: "function",
+    name: "end_negotiation",
+    description:
+      "End the call with the carrier politely. Call this after you've closed a " +
+      "deal, or after the carrier refused to lower their price twice, or if " +
+      "their best price is over your cap.",
+    parameters: {
+      type: "object",
+      properties: {
+        outcome: {
+          type: "string",
+          enum: ["deal", "no_deal"],
+          description: "Whether a commitment was reached.",
+        },
+      },
+      required: [],
+    },
+  },
 ] as const;
 
 export async function runTool(
@@ -175,6 +212,24 @@ export async function runTool(
 
     case "end_intake": {
       result = { ok: true, ending: true };
+      break;
+    }
+
+    // --- FASE 1: negociación con el carrier -------------------------------
+    case "note_carrier_refusal": {
+      call.refusals += 1;
+      result = {
+        refusals: call.refusals,
+        shouldClose: call.refusals >= 2,
+        holdingPriceMxn: Number.isFinite(Number(args.priceMxn))
+          ? Math.round(Number(args.priceMxn))
+          : undefined,
+      };
+      break;
+    }
+
+    case "end_negotiation": {
+      result = { ok: true, ending: true, outcome: args.outcome || "no_deal" };
       break;
     }
 
