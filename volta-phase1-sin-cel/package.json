@@ -1,9 +1,9 @@
 {
-  "name": "volta-phase1",
+  "name": "volta-phase1-sin-cel",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Fase 1 de Volta: un agente de voz que hace UNA llamada saliente y negocia dentro de un mandato.",
+  "description": "Volta Fase 1 SIN teléfono: hablás con el agente Realtime desde el navegador para probar el backend (mandato, tools, compromisos).",
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts"
@@ -11,7 +11,6 @@
   "dependencies": {
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "twilio": "^5.3.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {

@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Volta — prueba sin celular</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: ui-sans-serif, system-ui, sans-serif;
+    background: #0f1115; color: #e6e8ec;
+  }
+  header {
+    padding: 16px 20px; border-bottom: 1px solid #232733;
+    display: flex; align-items: center; gap: 16px;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #555; }
+  .dot.on { background: #2ecc71; }
+  button {
+    font: inherit; padding: 8px 16px; border-radius: 8px; border: 1px solid #2b3040;
+    background: #1b1f2a; color: #e6e8ec; cursor: pointer;
+  }
+  button.primary { background: #2f6fed; border-color: #2f6fed; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  main { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: #232733;
+         height: calc(100vh - 59px); }
+  section { background: #0f1115; padding: 16px 20px; overflow-y: auto; }
+  section h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+               color: #8a90a0; margin: 0 0 12px; }
+  .msg { padding: 8px 12px; border-radius: 10px; margin-bottom: 8px; max-width: 90%;
+         line-height: 1.4; font-size: 14px; }
+  .msg.user { background: #1b2537; margin-left: auto; }
+  .msg.agent { background: #1c2620; }
+  .msg .who { font-size: 11px; color: #8a90a0; margin-bottom: 2px; }
+  .tool { border: 1px solid #2b3040; border-radius: 10px; padding: 10px 12px;
+          margin-bottom: 8px; font-size: 13px; }
+  .tool .name { font-weight: 600; color: #7fb4ff; }
+  .tool pre { margin: 6px 0 0; white-space: pre-wrap; word-break: break-word;
+              color: #b8bdc9; font-size: 12px; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 20px; font-size: 11px;
+           font-weight: 600; margin-left: 6px; }
+  .badge.allowed { background: #16351f; color: #57d98a; }
+  .badge.rejected { background: #3a1a1e; color: #ff8f9c; }
+  .badge.needs_escalation { background: #3a2f14; color: #f5c451; }
+  .hint { color: #8a90a0; font-size: 13px; }
+  .mandate { border: 1px solid #2b3040; border-radius: 12px; padding: 16px;
+             margin-bottom: 20px; background: #12161f; }
+  .mandate.empty { opacity: .55; }
+  .mandate.captured { border-color: #2f6fed; box-shadow: 0 0 0 1px #2f6fed33; }
+  .mandate .price { font-size: 34px; font-weight: 700; color: #7fb4ff;
+                    line-height: 1.1; }
+  .mandate .price .cur { font-size: 15px; color: #8a90a0; font-weight: 600;
+                         margin-left: 6px; }
+  .mandate .price-label { font-size: 11px; text-transform: uppercase;
+                          letter-spacing: .08em; color: #8a90a0; margin-top: 2px; }
+  .mandate dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px;
+                margin: 14px 0 0; font-size: 13px; }
+  .mandate dt { color: #8a90a0; }
+  .mandate dd { margin: 0; color: #dfe3ea; word-break: break-word; }
+  .mandate .status { margin-top: 12px; font-size: 12px; color: #8a90a0; }
+  .mandate .status.done { color: #57d98a; }
+</style>
+</head>
+<body>
+  <header>
+    <span id="dot" class="dot"></span>
+    <h1>Volta — prueba sin celular</h1>
+    <button id="startBtn" class="primary">Start</button>
+    <button id="stopBtn" disabled>Stop</button>
+    <span class="hint">Fase 0 — intake. Sos el jurado: encargale el transporte a Volta en inglés. Usá auriculares.</span>
+  </header>
+  <main>
+    <section>
+      <h2>Conversación</h2>
+      <div id="convo"></div>
+    </section>
+    <section>
+      <h2>Mandato capturado</h2>
+      <div id="mandateCard" class="mandate empty">
+        <div class="price"><span id="mPrice">—</span><span class="cur">MXN</span></div>
+        <div class="price-label">precio máximo</div>
+        <dl id="mFields"></dl>
+        <div id="mStatus" class="status">Esperando a que Volta lo capture…</div>
+      </div>
+      <h2>Actividad del backend</h2>
+      <div id="tools"></div>
+    </section>
+  </main>
+
+<script>
+// ============================================================================
+// Cliente de prueba. Reemplaza al teléfono:
+//   micrófono --(PCM16 24kHz base64)--> WS /ws --> backend --> OpenAI
+//   OpenAI --> backend --> WS --> este navegador reproduce el audio
+// Además muestra transcripts y tools para que veas cómo el backend recibe datos.
+// ============================================================================
+
+const SAMPLE_RATE = 24000; // lo que espera OpenAI Realtime (pcm16 mono 24kHz)
+
+let ws = null;
+let micCtx = null, micStream = null, micNode = null, micSource = null, micSink = null;
+let outCtx = null, nextPlayTime = 0;
+let scheduled = []; // fuentes de audio agendadas, para cortar en barge-in
+
+const dot = document.getElementById("dot");
+const startBtn = document.getElementById("startBtn");
+const stopBtn = document.getElementById("stopBtn");
+const convo = document.getElementById("convo");
+const toolsEl = document.getElementById("tools");
+const mandateCard = document.getElementById("mandateCard");
+const mPrice = document.getElementById("mPrice");
+const mFields = document.getElementById("mFields");
+const mStatus = document.getElementById("mStatus");
+
+// --- helpers de audio -------------------------------------------------------
+function floatToPCM16(float32) {
+  const out = new Int16Array(float32.length);
+  for (let i = 0; i < float32.length; i++) {
+    let s = Math.max(-1, Math.min(1, float32[i]));
+    out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  return out;
+}
+function arrayBufferToBase64(buffer) {
+  let binary = "";
+  const bytes = new Uint8Array(buffer);
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+function base64ToInt16(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Int16Array(bytes.buffer);
+}
+
+// --- reproducción de audio del agente --------------------------------------
+function playAudio(base64) {
+  if (!outCtx) return;
+  const int16 = base64ToInt16(base64);
+  const f32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) f32[i] = int16[i] / 0x8000;
+
+  const buf = outCtx.createBuffer(1, f32.length, SAMPLE_RATE);
+  buf.getChannelData(0).set(f32);
+  const src = outCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(outCtx.destination);
+
+  const t = Math.max(outCtx.currentTime, nextPlayTime);
+  src.start(t);
+  nextPlayTime = t + buf.duration;
+  scheduled.push(src);
+  src.onended = () => { scheduled = scheduled.filter((s) => s !== src); };
+}
+// Barge-in: cortar todo lo que esté sonando o agendado.
+function clearAudio() {
+  for (const s of scheduled) { try { s.stop(); } catch {} }
+  scheduled = [];
+  nextPlayTime = outCtx ? outCtx.currentTime : 0;
+}
+
+// --- UI ---------------------------------------------------------------------
+function addMessage(who, text) {
+  const d = document.createElement("div");
+  d.className = "msg " + (who === "user" ? "user" : "agent");
+  d.innerHTML = `<div class="who">${who === "user" ? "Vos" : "Volta"}</div>${escapeHtml(text)}`;
+  convo.appendChild(d);
+  convo.scrollTop = convo.scrollHeight;
+}
+function addTool(kind, data) {
+  const d = document.createElement("div");
+  d.className = "tool";
+  if (kind === "tool_call") {
+    d.innerHTML = `<span class="name">→ ${data.name}</span><pre>${escapeHtml(JSON.stringify(data.args, null, 2))}</pre>`;
+  } else if (kind === "tool_result") {
+    const decision = data.result && data.result.decision;
+    const badge = decision ? `<span class="badge ${decision}">${decision}</span>` : "";
+    d.innerHTML = `<span class="name">← ${data.name}</span>${badge}<pre>${escapeHtml(JSON.stringify(data.result, null, 2))}</pre>`;
+  } else if (kind === "barge_in") {
+    d.innerHTML = `<span class="name">⚡ barge-in</span> (interrumpiste al agente)`;
+  } else if (kind === "error") {
+    d.innerHTML = `<span class="name" style="color:#ff8f9c">error</span><pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
+  }
+  toolsEl.appendChild(d);
+  toolsEl.scrollTop = toolsEl.scrollHeight;
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}
+
+// --- panel del mandato capturado -----------------------------------------
+function renderMandate(m, opts = {}) {
+  if (!m) return;
+  mandateCard.classList.remove("empty");
+  if (opts.justCaptured) mandateCard.classList.add("captured");
+  mPrice.textContent =
+    m.maxPriceMxn != null ? Number(m.maxPriceMxn).toLocaleString("es-MX") : "—";
+  const rows = [
+    ["Origen", m.origin],
+    ["Destino", m.destination],
+    ["Contenedor", m.containerNumber],
+    ["Pickup desde", m.pickupWindowStart],
+    ["Pickup hasta", m.pickupWindowEnd],
+    ["Condiciones vetadas", (m.forbiddenConditions || []).join(", ")],
+    ["Notas", m.notes],
+  ].filter(([, v]) => v);
+  mFields.innerHTML = rows
+    .map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd>`)
+    .join("");
+  const when = m.capturedAt ? new Date(m.capturedAt).toLocaleTimeString() : "";
+  mStatus.textContent = "Guardado en data/mandate.json" + (when ? " · " + when : "");
+}
+
+// Si ya hay un mandato de una corrida anterior, lo mostramos al cargar.
+fetch("/mandate")
+  .then((r) => r.json())
+  .then((m) => m && renderMandate(m))
+  .catch(() => {});
+
+// --- arranque / parada ------------------------------------------------------
+async function start() {
+  startBtn.disabled = true;
+
+  // 1) Contextos de audio a 24kHz (así no hay que remuestrear a mano).
+  micCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
+  outCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
+  nextPlayTime = 0;
+
+  // 2) Micrófono con cancelación de eco (importante si no usás auriculares).
+  //    autoGainControl OFF: el AGC amplifica el ruido de fondo cuando no hablás
+  //    y hace que el VAD se dispare solo.
+  micStream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false },
+  });
+  micSource = micCtx.createMediaStreamSource(micStream);
+
+  // 3) Capturamos con ScriptProcessor (deprecado pero simple y suficiente).
+  micNode = micCtx.createScriptProcessor(4096, 1, 1);
+  micNode.onaudioprocess = (e) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const input = e.inputBuffer.getChannelData(0); // Float32 a 24kHz
+    const pcm16 = floatToPCM16(input);
+    ws.send(JSON.stringify({ type: "audio", audio: arrayBufferToBase64(pcm16.buffer) }));
+  };
+  // Conectamos a un sink mudo para que el procesador corra sin escuchar tu propia voz.
+  micSink = micCtx.createGain();
+  micSink.gain.value = 0;
+  micSource.connect(micNode);
+  micNode.connect(micSink);
+  micSink.connect(micCtx.destination);
+
+  // 4) WebSocket con el backend.
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type: "start", mode: "intake" })); // Fase 0: hablar con el jurado
+    dot.classList.add("on");
+    stopBtn.disabled = false;
+  };
+  ws.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === "audio") playAudio(msg.audio);
+    else if (msg.type === "clear") clearAudio();
+    else if (msg.type === "event") {
+      if (msg.kind === "user_transcript") addMessage("user", msg.data);
+      else if (msg.kind === "agent_transcript") addMessage("agent", msg.data);
+      else if (msg.kind === "mandate_captured") {
+        renderMandate(msg.data, { justCaptured: true });
+        addTool("tool_result", { name: "mandate_captured", result: msg.data });
+      } else if (msg.kind === "intake_done") {
+        mStatus.textContent = "Intake completo — Volta cortó la llamada.";
+        mStatus.classList.add("done");
+        addMessage("agent", "— fin del intake —");
+        setTimeout(stop, 400);
+      } else addTool(msg.kind, msg.data);
+    } else if (msg.type === "started" && msg.mode === "negotiate") {
+      addTool("tool_result", { name: "mandate loaded", result: msg.mandate });
+    }
+  };
+  ws.onclose = () => stop();
+}
+
+function stop() {
+  try { ws && ws.send(JSON.stringify({ type: "stop" })); } catch {}
+  try { ws && ws.close(); } catch {}
+  ws = null;
+  if (micNode) micNode.onaudioprocess = null;
+  if (micStream) micStream.getTracks().forEach((t) => t.stop());
+  if (micCtx) micCtx.close();
+  if (outCtx) outCtx.close();
+  micCtx = outCtx = micStream = micNode = micSource = micSink = null;
+  dot.classList.remove("on");
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+}
+
+startBtn.onclick = () => start().catch((e) => { alert(e.message); stop(); });
+stopBtn.onclick = stop;
+</script>
+</body>
+</html>
