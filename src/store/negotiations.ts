@@ -1,83 +1,40 @@
 // -----------------------------------------------------------------------------
-// negotiationStore.ts
-// Estado de la NEGOCIACIÓN con los carriers, para el dashboard y para la fase
-// siguiente (comunicarle al cliente lo que consiguió Volta).
+// store/negotiations.ts
+// State of the NEGOTIATION with carriers, for the dashboard and for the next
+// phase (telling the client what Volta got).
 //
-// Un registro por llamada a un carrier (callId). Guarda:
-//   - qué pidió el cliente (snapshot del mandato),
-//   - cada oferta / condición / demora que dijo el carrier (historial completo),
-//   - la decisión final (trato / sin trato) y qué hay que comunicarle al cliente.
+// One record per carrier call (callId). It keeps:
+//   - what the client asked for (mandate snapshot),
+//   - every offer / condition / delay the carrier stated (full history),
+//   - the final decision (deal / no deal) and what to relay to the client.
 //
-// Persiste en data/negotiations.json. Se reinicia cuando entra un mandato nuevo
-// (arranca un trabajo nuevo) para que el panel muestre solo el trabajo actual.
+// The types live in domain/types.ts; this file is persistence only.
+// Persisted to data/negotiations.json. Reset when a new mandate comes in (a new
+// job starts) so the dashboard only shows the current job.
 // -----------------------------------------------------------------------------
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import type { Mandate } from "./types.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.join(__dirname, "..", "data");
-const FILE = path.join(DATA_DIR, "negotiations.json");
-
-// Una oferta puntual del carrier: lo que dijo en un momento de la charla.
-export type CarrierOffer = {
-  ts: string;
-  priceMxn?: number;
-  pickupTime?: string;
-  pickupDelayDays?: number; // >0 = más tarde que la ventana pedida por el cliente
-  delayNote?: string; // texto libre sobre el desvío de fecha ("recién el viernes")
-  conditions: string[]; // condiciones / salvedades que ata el carrier
-  note?: string;
-};
-
-export type CarrierFinal = {
-  outcome: "deal" | "no_deal";
-  priceMxn?: number;
-  pickupTime?: string;
-  pickupDelayDays?: number;
-  delayNote?: string;
-  conditionsToRelay: string[]; // lo que hay que comunicarle al cliente
-  priceWithinCap?: boolean;
-  summary?: string;
-  decidedAt: string;
-};
-
-export type CarrierNegotiation = {
-  callId: string;
-  carrierName: string;
-  startedAt: string;
-  offers: CarrierOffer[];
-  // Vista consolidada: último valor no vacío de cada campo + unión de condiciones.
-  latest: {
-    priceMxn?: number;
-    pickupTime?: string;
-    pickupDelayDays?: number;
-    delayNote?: string;
-    conditions: string[];
-  };
-  refusals: number;
-  status: "in_progress" | "deal" | "no_deal";
-  final?: CarrierFinal;
-  mandateSnapshot?: Mandate | null;
-};
+import type {
+  CarrierNegotiation,
+  CarrierOffer,
+  Mandate,
+} from "../domain/types.js";
+import { NEGOTIATIONS_FILE, readJson, writeJson } from "./paths.js";
 
 type Db = { updatedAt: string; carriers: CarrierNegotiation[] };
 
 let db: Db = load();
 
 function load(): Db {
-  try {
-    return JSON.parse(fs.readFileSync(FILE, "utf8")) as Db;
-  } catch {
-    return { updatedAt: new Date().toISOString(), carriers: [] };
-  }
+  return (
+    readJson<Db>(NEGOTIATIONS_FILE) ?? {
+      updatedAt: new Date().toISOString(),
+      carriers: [],
+    }
+  );
 }
 
 function persist(): void {
   db.updatedAt = new Date().toISOString();
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(FILE, JSON.stringify(db, null, 2), "utf8");
+  writeJson(NEGOTIATIONS_FILE, db);
 }
 
 function find(callId: string): CarrierNegotiation | undefined {
@@ -89,7 +46,7 @@ function addCondition(list: string[], cond: string): void {
   if (c && !list.some((x) => x.toLowerCase() === c.toLowerCase())) list.push(c);
 }
 
-// Arranca (o recupera) el registro de la negociación con un carrier.
+// Start (or recover) the negotiation record for a carrier.
 export function beginNegotiation(
   callId: string,
   mandate?: Mandate | null
@@ -115,7 +72,7 @@ export function beginNegotiation(
   return c;
 }
 
-// Registra una oferta / condición / demora dicha por el carrier.
+// Record an offer / condition / delay stated by the carrier.
 export function recordOffer(
   callId: string,
   carrierName: string | undefined,
@@ -144,7 +101,7 @@ export function recordRefusal(callId: string, count: number): void {
   }
 }
 
-// Cierra la negociación: fija la decisión final y qué comunicarle al cliente.
+// Close the negotiation: set the final decision and what to relay to the client.
 export function finalizeNegotiation(
   callId: string,
   input: {
@@ -195,7 +152,7 @@ export function getAllNegotiations(): CarrierNegotiation[] {
   return db.carriers;
 }
 
-// Trabajo nuevo (nuevo mandato) -> limpiamos las negociaciones viejas.
+// New job (new mandate) -> clear the old negotiations.
 export function resetNegotiations(): void {
   db = { updatedAt: new Date().toISOString(), carriers: [] };
   persist();

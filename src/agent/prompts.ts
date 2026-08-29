@@ -1,17 +1,17 @@
 // -----------------------------------------------------------------------------
-// prompt.ts
-// Instrucciones de Volta EN INGLÉS, con el mandato inyectado.
-// Las reglas duras se validan igual en código (mandate.ts); el prompt define
-// el comportamiento y el tono.
+// agent/prompts.ts
+// Volta's instructions, with the mandate injected.
+// The hard rules are validated in code anyway (domain/mandate.ts); the prompt
+// defines behaviour and tone.
 // -----------------------------------------------------------------------------
-import type { Mandate } from "./types.js";
+import type { Mandate } from "../domain/types.js";
 
 // -----------------------------------------------------------------------------
-// FASE 0 — INTAKE con el JURADO.
-// Volta recibe el encargo del cliente (el jurado): escucha, extrae el mandato
-// —sobre todo el PRECIO MÁXIMO en MXN— lo confirma, lo guarda con
-// set_negotiation_mandate y cierra la llamada con end_intake.
-// No negocia acá. No inventa números.
+// PHASE 0 — INTAKE with the CLIENT.
+// Volta takes the job from the client: listens, extracts the mandate — above all
+// the MAXIMUM PRICE in MXN — confirms it, saves it with set_negotiation_mandate
+// and ends the call with end_intake.
+// No negotiating here. No made-up numbers.
 // -----------------------------------------------------------------------------
 export function buildIntakeInstructions(): string {
   return `
@@ -68,13 +68,13 @@ RULES
 }
 
 // -----------------------------------------------------------------------------
-// FASE 1 — NEGOCIACIÓN con el CARRIER.
-// Volta llama a un transportista para mover el contenedor. Objetivo: cerrar un
-// BUEN precio sin arriesgar el trato. Un precio en o por debajo del tope del
-// mandato ya es un éxito: Volta hace 1-2 contraofertas modestas y acepta, sin
-// exigir que el carrier "ceda". Solo pelea de verdad si el precio está POR
-// ENCIMA del tope; si el carrier se niega a bajar DOS veces en ese caso, cierra
-// con cortesía. Antes de cerrar repasa los datos brevemente.
+// PHASE 1 — NEGOTIATION with the CARRIER.
+// Volta calls a carrier to move the container. Goal: close a GOOD price without
+// putting the deal at risk. A price at or below the mandate cap is already a
+// success: Volta makes 1-2 modest counters and accepts, without demanding the
+// carrier "give in". It only really fights when the price is ABOVE the cap; if
+// the carrier refuses to come down TWICE in that case, it closes politely.
+// Before closing it reads the terms back briefly.
 // -----------------------------------------------------------------------------
 export function buildInstructions(mandate: Mandate): string {
   const hasWindow =
