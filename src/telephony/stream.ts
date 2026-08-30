@@ -23,6 +23,7 @@ import { startSession } from "../session.js";
 import { forgetCarrier } from "./routing.js";
 import { scheduleCarrierCallback } from "./handoff.js";
 import { claimPendingHumanCarrier } from "../negotiation/round.js";
+import { findCarrierByPhone } from "../negotiation/roster.js";
 import type { Phase } from "../agent/realtime.js";
 
 // Marker name we use to hang up only once Volta's closing line has played.
@@ -40,6 +41,8 @@ export function handleTwilioMedia(ws: WebSocket, req: IncomingMessage) {
   let carrierHint = query.get("carrier") || undefined;
   // The other party's number: who called us, or who we called.
   let peer = query.get("peer") || "";
+  // Winner callback: confirm and book rather than collect another quote.
+  let confirming = query.get("confirming") === "1";
 
   let streamSid = "";
   let callSid = "";
@@ -107,18 +110,48 @@ export function handleTwilioMedia(ws: WebSocket, req: IncomingMessage) {
         streamSid = msg.start?.streamSid || msg.streamSid || "";
         callSid = msg.start?.callSid || "";
 
+        // The <Parameter> values from the TwiML. These WIN over the query
+        // string: Twilio does not reliably carry a query string on the
+        // <Stream url>, and without this every carrier call silently fell back
+        // to the intake script and the handoff lost the number to call back.
+        const params = msg.start?.customParameters || {};
+        if (params.mode) mode = params.mode === "negotiate" ? "negotiate" : "intake";
+        if (params.peer) peer = String(params.peer);
+        if (params.carrier) carrierHint = String(params.carrier);
+        if (params.confirming) confirming = String(params.confirming) === "1";
+
+        // Who is on the line, in order of confidence:
+        //   1. the round is holding a seat for its human carrier -> take it,
+        //      reusing the pre-created callId so the quote lands in the round;
+        //   2. otherwise, recognise them by their number from the roster, so a
+        //      carrier ringing in on their own (to push a delay or change their
+        //      price) is still identified and Volta greets them by name.
+        const claimed = mode === "negotiate" ? claimPendingHumanCarrier() : null;
+        const known = claimed ? null : mode === "negotiate" ? findCarrierByPhone(peer) : null;
+        const carrierMeta = claimed
+          ? {
+              carrierId: claimed.carrierId,
+              carrierName: claimed.carrierName,
+              kind: "human" as const,
+              roundId: claimed.roundId,
+            }
+          : known
+            ? { carrierId: known.id, carrierName: known.name, kind: "human" as const }
+            : undefined;
+
+        console.log(
+          `[stream] start | mode=${mode} peer=${peer || "(none)"} ` +
+            `source=${params.mode ? "customParameters" : "query"}` +
+            (carrierMeta ? ` | carrier: ${carrierMeta.carrierName}` : "") +
+            (claimed ? " (round seat)" : known ? " (by caller id)" : "")
+        );
+
         session = startSession({
           mode,
           transport: "phone",
+          confirming,
           callId: claimed?.callId,
-          carrier: claimed
-            ? {
-                carrierId: claimed.carrierId,
-                carrierName: claimed.carrierName,
-                kind: "human",
-                roundId: claimed.roundId,
-              }
-            : undefined,
+          carrier: carrierMeta,
           // Volta's audio -> Twilio -> the person's handset.
           sendAudio: (payload) =>
             toTwilio({ event: "media", streamSid, media: { payload } }),

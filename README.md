@@ -67,6 +67,41 @@ Each folder has one owner (see [EQUIPO.md](EQUIPO.md)):
 
 ---
 
+## The three numbers
+
+| Number | What it is | Who calls it |
+| --- | --- | --- |
+| **+1 585 601 1456** | Volta's PROVIDER line | the client, to hand over a job |
+| **+1 405 583 7265** | Volta's CARRIER line | a carrier, to reach Volta |
+| **+54 9 3454 019058** | the human carrier's phone | Volta dials this one |
+
+The role of an inbound call is decided by the number that was dialled, so there
+is no guessing — see `src/telephony/routing.ts`. The human carrier is also
+recognised by caller ID (`src/negotiation/roster.ts`): when they ring in, Volta
+greets them by name and already knows what they quoted, so they can push a delay
+or change their price without repeating the job.
+
+## A round: three carriers at once
+
+`POST /round/start` negotiates the current mandate against every carrier on the
+roster at the same time:
+
+- the two scripted carriers negotiate immediately, as text LLM conversations
+  (`src/negotiation/`);
+- the human carrier gets a seat that the next real call takes.
+
+On these calls Volta is SHOPPING, not booking: it pushes for the best price and
+tells each carrier it will call back if it goes ahead. Once everyone has quoted,
+`src/domain/compare.ts` picks the winner and `src/telephony/winner-call.ts` rings
+that carrier back with a short confirmation script — the only call where Volta
+actually commits.
+
+Whether a quote counts is decided in code, not by the model: a price at or below
+the cap is usable, even when the model would have called it a "no deal". Leaving
+that to the prompt silently dropped good carriers from the comparison.
+
+---
+
 ## Setup
 
 **Requirements:** Node 20+, an OpenAI API key with Realtime GA (`gpt-realtime`),

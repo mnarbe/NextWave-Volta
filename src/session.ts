@@ -40,6 +40,8 @@ export type SessionOptions = {
   // phone transport uses it to know whether the brief was actually captured
   // before deciding what to do once the call ends.
   onEvent?: (kind: string, data: unknown) => void;
+  // Winner callback: confirm and book, do not re-negotiate.
+  confirming?: boolean;
 };
 
 export type Session = {
@@ -68,7 +70,7 @@ export function startSession(opts: SessionOptions): Session {
       },
       onFinal: opts.onFinal,
     },
-    { phase: opts.mode, transport: opts.transport }
+    { phase: opts.mode, transport: opts.transport, confirming: opts.confirming }
   );
 
   publish({

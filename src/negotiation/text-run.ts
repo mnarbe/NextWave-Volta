@@ -51,7 +51,15 @@ export async function runTextNegotiation({ callId, mandate, carrier }: RunArgs):
   const dispatcher = new SimCarrier(carrier.name, carrier.persona, mandate);
   const tools = wrapTools(toolDefinitions);
   const messages: ChatMessage[] = [
-    { role: "system", content: `${buildInstructions(mandate)}\n\n${TEXT_PREAMBLE}` },
+    {
+      role: "system",
+      // Same round rules as the live carriers: get a quote, promise a callback,
+      // do not book. The winner is decided afterwards.
+      content: `${buildInstructions(mandate, {
+        carrierName: carrier.name,
+        collectingQuotes: true,
+      })}\n\n${TEXT_PREAMBLE}`,
+    },
     { role: "user", content: "Connected. The carrier's dispatcher is on the line." },
   ];
 

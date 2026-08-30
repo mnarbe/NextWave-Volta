@@ -8,9 +8,12 @@ import http from "node:http";
 import { config, twilioReady, twilioMissing } from "./config.js";
 import { createApp } from "./http/routes.js";
 import { attachWebSocket } from "./http/ws.js";
+import { watchRounds } from "./telephony/winner-call.js";
 
 const server = http.createServer(createApp());
 attachWebSocket(server);
+// When a round closes, call the winning carrier back to confirm.
+watchRounds();
 
 server.listen(config.port, () => {
   console.log(`Volta listening on http://localhost:${config.port}`);

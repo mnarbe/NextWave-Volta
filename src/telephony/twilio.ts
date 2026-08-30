@@ -37,6 +37,8 @@ export type StreamParams = {
   mode: "intake" | "negotiate";
   // Carrier name, if we know it upfront (UI only).
   carrier?: string;
+  // Winner callback: confirm and book instead of collecting another quote.
+  confirming?: boolean;
   // The other party's number (E.164), whichever side dialled. The media
   // stream needs it to hand off to the next call when this one ends.
   peer?: string;
@@ -69,6 +71,7 @@ export function streamTwiml(params: StreamParams): string {
     `<Parameter name="mode" value="${xmlEscape(params.mode)}"/>`,
     params.peer ? `<Parameter name="peer" value="${xmlEscape(params.peer)}"/>` : "",
     params.carrier ? `<Parameter name="carrier" value="${xmlEscape(params.carrier)}"/>` : "",
+    params.confirming ? `<Parameter name="confirming" value="1"/>` : "",
   ].join("");
 
   return (
@@ -85,11 +88,17 @@ export async function placeCall(opts: {
   to: string;
   mode: "intake" | "negotiate";
   carrier?: string;
+  confirming?: boolean;
 }) {
   const call = await twilioClient().calls.create({
     to: opts.to,
     from: config.twilio.number,
-    twiml: streamTwiml({ mode: opts.mode, carrier: opts.carrier, peer: opts.to }),
+    twiml: streamTwiml({
+      mode: opts.mode,
+      carrier: opts.carrier,
+      confirming: opts.confirming,
+      peer: opts.to,
+    }),
     statusCallback: `${config.publicUrl}/twilio/status`,
     statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
   });

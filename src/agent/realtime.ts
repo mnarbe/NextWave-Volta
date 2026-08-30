@@ -14,6 +14,7 @@ import { log, getCall } from "../store/calls.js";
 import { buildInstructions, buildIntakeInstructions } from "./prompts.js";
 import { toolDefinitions, intakeToolDefinitions, runTool } from "./tools.js";
 import { DEFAULT_MANDATE } from "../domain/defaults.js";
+import { getNegotiation, lastQuoteFor } from "../store/negotiations.js";
 
 // "intake" = Volta talks to the CLIENT to capture the mandate.
 // "negotiate" = Volta negotiates with a carrier.
@@ -38,6 +39,9 @@ type Callbacks = {
 export type BridgeOptions = {
   phase?: Phase;
   transport?: Transport;
+  // This is the WINNER callback: terms are already agreed, Volta calls to
+  // confirm and book rather than to collect another quote.
+  confirming?: boolean;
 };
 
 export class RealtimeBridge {
@@ -46,6 +50,7 @@ export class RealtimeBridge {
   private cb: Callbacks;
   private phase: Phase;
   private transport: Transport;
+  private confirming: boolean;
   private ready = false;
   // Is a model response in flight? Only then does response.cancel make sense
   // (the GA API errors out if there is no active response).
@@ -60,6 +65,7 @@ export class RealtimeBridge {
     this.cb = cb;
     this.phase = opts.phase ?? "intake";
     this.transport = opts.transport ?? "browser";
+    this.confirming = opts.confirming ?? false;
 
     // GA API: no "OpenAI-Beta" header. The model goes in the query string and
     // also inside session.update (below).
@@ -123,9 +129,24 @@ export class RealtimeBridge {
       });
     }
 
+    // If this call is part of a round we already know which carrier is on the
+    // line, and Volta must collect a quote rather than book the load: the
+    // winner is picked afterwards and called back to confirm.
+    const neg = isIntake ? undefined : getNegotiation(this.callId);
+
+    // If we recognised this carrier and they have quoted before, hand Volta
+    // that quote so it can open with it instead of starting from scratch.
+    const previous =
+      neg?.carrierId && !neg.roundId ? lastQuoteFor(neg.carrierId, this.callId) : undefined;
+
     const instructions = isIntake
       ? buildIntakeInstructions()
-      : buildInstructions(call.mandate ?? DEFAULT_MANDATE);
+      : buildInstructions(call.mandate ?? DEFAULT_MANDATE, {
+          carrierName: neg?.carrierName || undefined,
+          collectingQuotes: Boolean(neg?.roundId) && !this.confirming,
+          confirming: this.confirming,
+          standingOffer: previous,
+        });
     const tools = isIntake ? intakeToolDefinitions : toolDefinitions;
 
     console.log(

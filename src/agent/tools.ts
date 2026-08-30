@@ -11,6 +11,7 @@ import {
   recordOffer,
   recordRefusal,
   finalizeNegotiation,
+  getNegotiation,
   resetNegotiations,
 } from "../store/negotiations.js";
 import type { NegotiationMandate, Proposal } from "../domain/types.js";
@@ -346,11 +347,34 @@ export async function runTool(
     }
 
     case "end_negotiation": {
-      const outcome = args.outcome === "deal" ? "deal" : "no_deal";
       const finalPickupTime = args.finalPickupTime || undefined;
+      const finalPrice = num(args.finalPriceMxn);
+
+      // In a ROUND, "outcome" means "is this quote usable?", and that is a
+      // question about the price, not a judgement call. The model reliably
+      // negotiates the price down but then marks a perfectly good quote as
+      // "no_deal" because it did not book it on the call — which silently drops
+      // that carrier from the comparison. So we decide it here.
+      const cap = call.mandate?.maxPriceMxn;
+      const inRound = Boolean(getNegotiation(callId)?.roundId);
+      const modelOutcome = args.outcome === "deal" ? "deal" : "no_deal";
+      const outcome: "deal" | "no_deal" =
+        inRound && finalPrice != null && cap != null
+          ? finalPrice <= cap
+            ? "deal"
+            : "no_deal"
+          : modelOutcome;
+
+      if (outcome !== modelOutcome) {
+        log(callId, "tool_result", {
+          name: "end_negotiation",
+          note: `outcome corrected ${modelOutcome} -> ${outcome} (${finalPrice} vs cap ${cap})`,
+        });
+      }
+
       const carrier = finalizeNegotiation(callId, {
         outcome,
-        finalPriceMxn: num(args.finalPriceMxn),
+        finalPriceMxn: finalPrice,
         finalPickupTime,
         pickupDelayDays: computeDelayDays(call.mandate, finalPickupTime),
         delayNote: args.delayNote || undefined,

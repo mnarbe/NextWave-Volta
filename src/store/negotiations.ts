@@ -221,3 +221,24 @@ export function finalizeRound(mandate: Mandate | null): RoundDecision {
 export function getDecision(): RoundDecision | undefined {
   return db.decision;
 }
+
+// The last quote this carrier gave us, from an EARLIER call (any round). Lets
+// Volta open a call-back with what they already offered instead of starting
+// from zero. `exceptCallId` skips the call currently in progress.
+export function lastQuoteFor(
+  carrierId: string,
+  exceptCallId?: string
+): { priceMxn?: number; pickupTime?: string; conditions?: string[] } | undefined {
+  const past = db.carriers
+    .filter((c) => c.carrierId === carrierId && c.callId !== exceptCallId)
+    .sort((a, b) => (a.startedAt || "").localeCompare(b.startedAt || ""));
+  const last = past[past.length - 1];
+  if (!last) return undefined;
+  const src = last.final ?? last.latest;
+  if (src.priceMxn == null && !src.pickupTime) return undefined;
+  return {
+    priceMxn: src.priceMxn,
+    pickupTime: src.pickupTime,
+    conditions: last.final?.conditionsToRelay ?? last.latest.conditions,
+  };
+}

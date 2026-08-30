@@ -10,6 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { config } from "../config.js";
 import type { CarrierSpec } from "../domain/types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -45,10 +46,22 @@ export const DEMO_ROSTER: CarrierSpec[] = [
   },
   {
     id: "human-1",
-    name: "You (carrier)",
+    name: "Transportes Uribe",
     kind: "human",
+    // The phone Volta dials for this carrier, and the caller ID it recognises
+    // them by when they ring in. Override with DEMO_CARRIER_NUMBER in .env.
+    phone: config.demoCarrierNumber || "+5493454019058",
   },
 ];
+
+// Which carrier is calling from this number? Lets Volta greet a carrier by
+// name and pick up their standing quote when they ring in on their own —
+// to push a delay, or to change their price.
+export function findCarrierByPhone(phone: string | undefined): CarrierSpec | undefined {
+  if (!phone) return undefined;
+  const key = phone.replace(/[^\d+]/g, "");
+  return loadRoster().find((c) => c.phone && c.phone.replace(/[^\d+]/g, "") === key);
+}
 
 function isSpec(x: any): x is CarrierSpec {
   return (

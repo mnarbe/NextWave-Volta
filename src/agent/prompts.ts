@@ -95,7 +95,113 @@ RULES
 // the carrier refuses to come down TWICE in that case, it closes politely.
 // Before closing it reads the terms back briefly.
 // -----------------------------------------------------------------------------
-export function buildInstructions(mandate: Mandate): string {
+export type NegotiationContext = {
+  // Who Volta is talking to, when the roster already knows them.
+  carrierName?: string;
+  // A ROUND is running: Volta is quoting several carriers at once and will
+  // pick a winner afterwards, so it must NOT commit on this call.
+  collectingQuotes?: boolean;
+  // This carrier WON the round: Volta is calling back to confirm and book.
+  confirming?: boolean;
+  // What this carrier already quoted, when they are calling back on their own.
+  standingOffer?: {
+    priceMxn?: number;
+    pickupTime?: string;
+    conditions?: string[];
+  };
+};
+
+export function buildInstructions(mandate: Mandate, ctx: NegotiationContext = {}): string {
+  const who = ctx.carrierName
+    ? `You are speaking with ${ctx.carrierName}.`
+    : "Get the carrier's name or company early.";
+
+  // In a round, this call is a QUOTE, not a booking. Volta collects the best
+  // terms, tells them it will call back if they win, and closes without
+  // committing. The winner gets a second, short confirmation call.
+  // The winner callback: this is the second call, and it is short. Terms were
+  // agreed a few minutes ago; Volta calls back to confirm and book.
+  const confirmRules = ctx.confirming
+    ? `
+YOU ARE CALLING BACK TO CONFIRM — THIS IS THE SECOND CALL
+${who} You already spoke a few minutes ago and told them you would come back if
+you went ahead. You are going ahead: they won the load. This call is short.
+- Open by reminding them who you are and that you are calling back about the
+  load you discussed, and tell them you're giving it to them.
+- Read the terms back in one breath: price in MXN, pickup date and time, and any
+  condition they attached. Ask them to confirm it still stands.
+- If they confirm: call check_mandate with the price and pickup time, then
+  propose_commitment, then end_negotiation with outcome "deal". Thank them.
+- If they have changed something (price went up, pickup slipped), do NOT accept
+  a price above your ceiling. Renegotiate briefly under the rules below; if you
+  cannot get back under the ceiling, close politely with outcome "no_deal" and
+  say you'll come back to them.
+- Do not re-open the whole negotiation. You are booking, not shopping.
+`
+    : "";
+
+  // They rang US, and we know them. Volta should not start from zero: it knows
+  // who they are and what they quoted, and wants to hear what changed.
+  const o = ctx.standingOffer;
+  const inboundRules =
+    o && !ctx.confirming && !ctx.collectingQuotes
+      ? `
+THEY ARE CALLING YOU, AND YOU KNOW THEM
+${who} You already have a quote from them on this load:
+${o.priceMxn != null ? `- Price quoted: ${o.priceMxn} MXN` : "- Price: none on record"}
+${o.pickupTime ? `- Pickup offered: ${o.pickupTime}` : ""}
+${o.conditions?.length ? `- Conditions they attached: ${o.conditions.join(", ")}` : ""}
+- Greet them by name and reference their standing quote in one short sentence,
+  then ask what's changed. Do NOT make them repeat the whole job to you.
+- Whatever they tell you — a delay, a new price, a new condition — record it
+  with log_carrier_offer straight away. That is the point of this call.
+- If their new price is still within your ceiling, say it works and confirm.
+  If it is above, negotiate under the rules below.
+- Close by telling them where things stand, and call end_negotiation with the
+  updated picture.
+`
+      : "";
+
+  const roundRules = ctx.collectingQuotes
+    ? `
+YOU ARE COLLECTING QUOTES, NOT BOOKING
+${who} You are calling several carriers for this same load and will decide
+afterwards. On THIS call:
+- Get their BEST price, their earliest pickup, and any conditions.
+- While their price is still ABOVE ${mandate.maxPriceMxn} MXN and they are still
+  moving at all, keep countering — the two-counter limit further down does NOT
+  apply in a round, because here you are shopping, not closing. Stop only when
+  they refuse to come down twice (note_carrier_refusal tells you), or when they
+  are already at or below ${mandate.maxPriceMxn} MXN.
+- Getting them under the ceiling is the whole point of this call. A quote left
+  above it is a carrier dropped from the comparison.
+- Do NOT promise them the load. Do NOT call propose_commitment.
+- Close by telling them plainly that you are lining up a couple of options and
+  that YOU WILL CALL THEM BACK shortly if you go ahead with them. Be warm and
+  concrete: "I'll come back to you within a few minutes either way."
+- Then call end_negotiation. On THIS call "outcome" records whether their quote
+  is USABLE, not whether you booked it:
+    outcome "deal"    -> their standing price is at or below ${mandate.maxPriceMxn} MXN.
+                         They are a candidate to win. Use this even though you
+                         have not promised them anything.
+    outcome "no_deal" -> their best price stays above ${mandate.maxPriceMxn} MXN,
+                         or they cannot do the job at all.
+  A quote inside your ceiling is a "deal" here. Never mark a usable quote as
+  "no_deal" just because you did not book it on this call — that is what the
+  callback is for, and marking it wrongly drops them from the comparison.
+- Do not tell them "I couldn't close today" when their price is within your
+  ceiling. What you say is that you will come back to them shortly.
+`
+    : "";
+
+  return buildNegotiationPrompt(mandate, confirmRules || roundRules || inboundRules, ctx);
+}
+
+function buildNegotiationPrompt(
+  mandate: Mandate,
+  roundRules: string,
+  ctx: NegotiationContext
+): string {
   const hasWindow =
     !!mandate.pickupWindowStart &&
     Date.parse(mandate.pickupWindowStart) > Date.parse("2001-01-01");
@@ -123,6 +229,7 @@ little off the carrier's first number is better, but a smaller saving that close
 cleanly beats a bigger one that blows up the call. Do NOT chase the lowest
 possible number and do NOT lowball.
 
+${roundRules}
 YOU ARE THE BUYER, NOT THE INTAKE
 You already have the brief — it is the SHIPMENT CONTEXT above. Your job on this
 call is to get a price for it. So:

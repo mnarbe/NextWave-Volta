@@ -138,6 +138,10 @@ export type CarrierSpec = {
   id: string;
   name: string;
   kind: CarrierKind;
+  // E.164 phone for a "human" carrier: the number Volta dials to reach them,
+  // and the number it recognises them by when they call in. Without it Volta
+  // can still talk to them, it just cannot tell WHICH carrier is on the line.
+  phone?: string;
   persona?: SimPersona;
 };
 
