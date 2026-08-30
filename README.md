@@ -85,11 +85,52 @@ The current prototype prepares the handover context but does not yet warm-transf
 - Firebase Admin / Firestore for optional exports
 - Vanilla HTML, CSS, and JavaScript dashboard
 
+## Run with Docker
+
+The fastest way to get Volta up without installing anything.
+
+```bash
+cp .env.example .env     # put your OPENAI_API_KEY in it
+docker compose up --build
+```
+
+Dashboard on http://localhost:3000.
+
+**`OPENAI_API_KEY` is the only variable you need.** Everything else degrades
+gracefully — on boot the server tells you what is disabled and why.
+
+What works with just that key:
+
+- The dashboard.
+- The **parallel carrier round**: the two scripted carriers negotiate against the
+  mandate and the comparator picks a winner.
+- The **human carrier over the browser microphone** (the default seat).
+- The mandate enforced in code — try to push Volta over the cap and watch it refuse.
+
+What needs more:
+
+| Feature | Needs |
+|---|---|
+| Real phone calls | Twilio credentials **and** a public tunnel Twilio can reach. Docker does not replace ngrok: a container on your laptop is not reachable from Twilio. |
+| Recap emails | `RESEND_API_KEY` + `RESEND_FROM` on a verified domain. Without them a commitment stays `pending_recap` and says why — that is correct behaviour, not a bug. |
+| Firestore mirror | `FIREBASE_SERVICE_ACCOUNT`. Local `data/*.json` stays the source of truth either way. |
+
+Notes:
+
+- `data/` is mounted as a volume, so the captured mandate and negotiations
+  survive `docker compose down`. The stores read it at boot, so edit it with the
+  container stopped.
+- `.env` is excluded from the image by `.dockerignore` — secrets are passed at
+  run time, never baked in.
+- **The `.env` parser is stricter than dotenv's.** Every non-comment line must be
+  `KEY=value`; a bare value on its own line fails the container with
+  `invalid environment variable`.
+
 ## Run locally
 
 ### Prerequisites
 
-- Node.js 20+
+- Node.js 22+ (see `engines` in package.json; the Docker image pins this)
 - An OpenAI API key with access to `gpt-realtime`
 - For live phone calls: a Twilio account, a voice-enabled number, and a public HTTPS tunnel such as ngrok
 

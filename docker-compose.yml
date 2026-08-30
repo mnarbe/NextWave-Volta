@@ -1,0 +1,18 @@
+services:
+  volta:
+    build: .
+    # Copiá primero el ejemplo:  cp .env.example .env
+    # Lo único obligatorio para arrancar es OPENAI_API_KEY.
+    env_file: .env
+    ports:
+      # En una red que no controlás (wifi del venue, coworking), usá el binding
+      # de loopback para que el puerto no quede expuesto a la LAN:
+      #   - "127.0.0.1:${PORT:-3000}:3000"
+      - "${PORT:-3000}:3000"
+    environment:
+      # Fijo adentro del contenedor; el mapeo de arriba decide el puerto de afuera.
+      PORT: 3000
+    volumes:
+      # El estado queda en tu máquina y sobrevive a un `down`/`up`.
+      - ./data:/app/data
+    restart: unless-stopped

@@ -11,7 +11,8 @@
     "test:stream": "node scripts/fake-twilio.mjs",
     "typecheck": "tsc --noEmit",
     "check:email": "tsx scripts/check-email.ts",
-    "test:email": "tsx src/email/_recap.test.ts"
+    "test:email": "tsx src/email/_recap.test.ts",
+    "test:guard": "tsx src/http/_local-only.test.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
@@ -25,5 +26,8 @@
     "@types/ws": "^8.5.12",
     "tsx": "^4.19.1",
     "typescript": "^5.6.2"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

@@ -1,0 +1,17 @@
+# Secretos: NUNCA entran a la imagen.
+.env
+*.pem
+serviceAccountKey.json
+
+# Instalado para macOS/Windows: copiarlo a una imagen Linux rompe la instalación.
+node_modules/
+
+# Estado en runtime: va por volumen, no horneado en la imagen.
+data/
+
+.git/
+.gitignore
+npm-debug.log*
+.DS_Store
+*.md
+!README.md
