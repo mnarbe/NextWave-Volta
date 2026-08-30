@@ -83,12 +83,15 @@ or change their price without repeating the job.
 
 ## A round: three carriers at once
 
-`POST /round/start` negotiates the current mandate against every carrier on the
-roster at the same time:
+A round starts BY ITSELF the moment the intake call with the provider ends —
+nobody presses anything. (`POST /round/start` does the same by hand.) It
+negotiates the current mandate against every carrier on the roster at once:
 
 - the two scripted carriers negotiate immediately, as text LLM conversations
   (`src/negotiation/`);
-- the human carrier gets a seat that the next real call takes.
+- the human carrier gets a seat, and Volta rings their phone to fill it. If
+  they miss the call they can ring the carrier line instead: the seat is still
+  theirs.
 
 On these calls Volta is SHOPPING, not booking: it pushes for the best price and
 tells each carrier it will call back if it goes ahead. Once everyone has quoted,
