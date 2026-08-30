@@ -4,6 +4,12 @@
 
 Built for the **Nauta challenge, "The Agent on the Line,"** at NextWave Hackathon 2026.
 
+**▶ [Watch the demo](https://drive.google.com/file/d/14F6faGotnaHcWsj6_yTxmmRLM9E8KFRI/view?usp=sharing)** — a recorded run: a shipper calls in with a mandate, three carriers negotiate in parallel, and the winning offer is booked.
+
+**[volta-nextwave.vercel.app](https://volta-nextwave.vercel.app/)** — one-page overview, and the fastest way to understand the project without reading code: the problem, how a call becomes a booking, the negotiation flow and system architecture as diagrams, why the mandate is enforced in code rather than in the prompt, and the stack.
+
+This README covers running it; [ARCHITECTURE.md](ARCHITECTURE.md) covers how the services connect.
+
 ## The problem
 
 Much of ground transportation is still coordinated by phone. Quotes, pickup windows, changes, and exceptions live inside fast-moving conversations, leaving teams to reconcile promises from memory, notes, and follow-up calls.
