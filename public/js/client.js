@@ -98,6 +98,42 @@ function onServerMessage(ev) {
       if (msg.data && msg.data.carrier) view.refreshNegotiations();
       break;
 
+    // --- a booked carrier changed the deal ------------------------------------
+    case "change_auto_accepted":
+      view.addMessage("agent", "— change accepted: still within what the client authorised —");
+      view.addTool("tool_result", { name: "request_change", result: msg.data });
+      break;
+
+    case "change_needs_provider":
+      view.setPhoneState("change needs the client's decision", "err");
+      view.addMessage("agent", `— cannot accept this: ${(msg.data.reasons || [])[0] || ""} —`);
+      view.addTool("tool_result", { name: "request_change", result: msg.data });
+      break;
+
+    case "escalation_call_scheduled":
+      view.setPhoneState(`calling the client about ${msg.data.carrierName}…`, "live");
+      view.addMessage("agent", "— calling the client to ask about the change —");
+      break;
+
+    case "provider_decided":
+      view.addMessage(
+        "agent",
+        `— client says ${msg.data.approved ? "YES" : "NO"} to the change —`
+      );
+      view.addTool("tool_result", { name: "provider_decision", result: msg.data });
+      break;
+
+    case "carrier_report_scheduled":
+      view.setPhoneState(
+        `calling ${msg.data.carrierName} back: ${msg.data.approved ? "accepted" : "cancelled"}`,
+        "live"
+      );
+      break;
+
+    case "escalation_done":
+      view.setPhoneState("no call");
+      break;
+
     // --- handoff: after the intake, Volta calls the same number back ----------
     case "handoff_scheduled": {
       const secs = Math.round((msg.data.delayMs || 0) / 1000);

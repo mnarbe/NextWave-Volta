@@ -11,6 +11,7 @@
 // -----------------------------------------------------------------------------
 import twilioSdk from "twilio";
 import { config, twilioReady, twilioMissing } from "../config.js";
+import type { Phase } from "../agent/realtime.js";
 
 let client: ReturnType<typeof twilioSdk> | null = null;
 
@@ -33,8 +34,9 @@ function xmlEscape(s: string): string {
 }
 
 export type StreamParams = {
-  // "intake" = talk to the provider. "negotiate" = negotiate with a carrier.
-  mode: "intake" | "negotiate";
+  // Which script the call runs: talk to the provider, negotiate with a
+  // carrier, or escalate a change back to the provider.
+  mode: Phase;
   // Carrier name, if we know it upfront (UI only).
   carrier?: string;
   // Winner callback: confirm and book instead of collecting another quote.
@@ -86,7 +88,7 @@ export function streamTwiml(params: StreamParams): string {
 // parameter), so outbound calls need no second webhook.
 export async function placeCall(opts: {
   to: string;
-  mode: "intake" | "negotiate";
+  mode: Phase;
   carrier?: string;
   confirming?: boolean;
 }) {

@@ -22,9 +22,15 @@ import { publish } from "../bus.js";
 import { startSession } from "../session.js";
 import { forgetCarrier } from "./routing.js";
 import { scheduleCarrierCallback } from "./handoff.js";
+import { escalateToProvider, reportBackToCarrier } from "./escalation-calls.js";
 import { claimPendingHumanCarrier } from "../negotiation/round.js";
 import { findCarrierByPhone } from "../negotiation/roster.js";
 import type { Phase } from "../agent/realtime.js";
+
+// The script this call runs. Anything unrecognised means intake.
+function toPhase(v: string | null): Phase {
+  return v === "negotiate" || v === "escalate" ? v : "intake";
+}
 
 // Marker name we use to hang up only once Volta's closing line has played.
 const FINAL_MARK = "volta-final";
@@ -37,7 +43,7 @@ export function handleTwilioMedia(ws: WebSocket, req: IncomingMessage) {
   // start.customParameters (read in the "start" event below).
   const query = new URL(req.url || "/", "http://localhost").searchParams;
 
-  let mode: Phase = query.get("mode") === "negotiate" ? "negotiate" : "intake";
+  let mode: Phase = toPhase(query.get("mode"));
   let carrierHint = query.get("carrier") || undefined;
   // The other party's number: who called us, or who we called.
   let peer = query.get("peer") || "";
@@ -54,6 +60,10 @@ export function handleTwilioMedia(ws: WebSocket, req: IncomingMessage) {
   // the provider often hangs up the moment they have finished dictating, and
   // we still want to ring them back as the carrier.
   let briefCaptured = false;
+  // A booked carrier asked for something beyond the mandate on this call.
+  let escalationPending = false;
+  // The client gave their yes/no on this call.
+  let providerDecided = false;
 
   const toTwilio = (obj: unknown) => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
@@ -88,6 +98,17 @@ export function handleTwilioMedia(ws: WebSocket, req: IncomingMessage) {
       if (mode === "intake" && briefCaptured) {
         scheduleCarrierCallback({ to: peer, fromCallId: session.callId });
       }
+
+      // A booked carrier left a change we are not allowed to accept on our own:
+      // the next call is to the client, to ask them.
+      if (mode === "negotiate" && escalationPending) {
+        escalateToProvider(session.callId);
+      }
+
+      // The client just gave their answer: ring the carrier back with it.
+      if (mode === "escalate" && providerDecided) {
+        reportBackToCarrier(session.callId);
+      }
     }
   };
 
@@ -115,7 +136,7 @@ export function handleTwilioMedia(ws: WebSocket, req: IncomingMessage) {
         // <Stream url>, and without this every carrier call silently fell back
         // to the intake script and the handoff lost the number to call back.
         const params = msg.start?.customParameters || {};
-        if (params.mode) mode = params.mode === "negotiate" ? "negotiate" : "intake";
+        if (params.mode) mode = toPhase(String(params.mode));
         if (params.peer) peer = String(params.peer);
         if (params.carrier) carrierHint = String(params.carrier);
         if (params.confirming) confirming = String(params.confirming) === "1";
@@ -168,6 +189,9 @@ export function handleTwilioMedia(ws: WebSocket, req: IncomingMessage) {
             if (mode === "intake" && (kind === "mandate_captured" || kind === "intake_done")) {
               briefCaptured = true;
             }
+            // These decide what the NEXT call is, once this one hangs up.
+            if (kind === "change_needs_provider") escalationPending = true;
+            if (kind === "provider_decided") providerDecided = true;
           },
         });
 

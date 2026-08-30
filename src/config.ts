@@ -64,6 +64,10 @@ export const config = {
   // withheld, or the intake happened in browser mode), it falls back to this.
   // Set it to your own phone and the handoff always fires.
   demoCarrierNumber: process.env.DEMO_CARRIER_NUMBER || "",
+
+  // The client's phone, for when Volta has to call THEM back about a change a
+  // carrier made. In the demo it is the same handset as the carrier.
+  providerNumber: process.env.DEMO_PROVIDER_NUMBER || "",
 };
 
 // Can we use the phone? We need credentials, a number and a public URL.

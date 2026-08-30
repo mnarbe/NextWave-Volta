@@ -11,14 +11,24 @@
 import WebSocket from "ws";
 import { config } from "../config.js";
 import { log, getCall } from "../store/calls.js";
-import { buildInstructions, buildIntakeInstructions } from "./prompts.js";
-import { toolDefinitions, intakeToolDefinitions, runTool } from "./tools.js";
+import {
+  buildInstructions,
+  buildIntakeInstructions,
+  buildEscalationInstructions,
+} from "./prompts.js";
+import {
+  toolDefinitions,
+  intakeToolDefinitions,
+  escalationToolDefinitions,
+  runTool,
+} from "./tools.js";
 import { DEFAULT_MANDATE } from "../domain/defaults.js";
 import { getNegotiation, lastQuoteFor } from "../store/negotiations.js";
+import { currentBooking, isBookedCarrier, pendingChange } from "../negotiation/escalation.js";
 
 // "intake" = Volta talks to the CLIENT to capture the mandate.
 // "negotiate" = Volta negotiates with a carrier.
-export type Phase = "intake" | "negotiate";
+export type Phase = "intake" | "negotiate" | "escalate";
 
 // How the audio reaches the person.
 export type Transport = "browser" | "phone";
@@ -116,6 +126,34 @@ export class RealtimeBridge {
     if (!call) return;
 
     const isIntake = this.phase === "intake";
+    const isEscalation = this.phase === "escalate";
+
+    // Calling the client about a change we are not authorised to accept. The
+    // whole call is defined by the pending change; without one there is nothing
+    // to ask them, so we fall back to the negotiation script rather than ring
+    // someone up with no question.
+    const change = isEscalation ? pendingChange() : null;
+    if (isEscalation && change && call.mandate) {
+      const instructions = buildEscalationInstructions(call.mandate, {
+        carrierName: change.carrierName,
+        agreed: change.agreed,
+        requested: change.requested,
+        reasons: change.reasons,
+      });
+      console.log(
+        `[realtime] call ${this.callId.slice(0, 8)} | phase=escalate ` +
+          `carrier=${change.carrierName} transport=${this.transport}`
+      );
+      this.openSession(instructions, escalationToolDefinitions);
+      return;
+    }
+    if (isEscalation) {
+      log(this.callId, "error", {
+        where: "realtime.onOpen",
+        msg: "escalate phase with no pending change — nothing to ask the client",
+      });
+    }
+
 
     // A negotiation with no mandate used to silently fall back to the intake
     // script: Volta would greet the carrier as if calling for a quote and then
@@ -139,21 +177,42 @@ export class RealtimeBridge {
     const previous =
       neg?.carrierId && !neg.roundId ? lastQuoteFor(neg.carrierId, this.callId) : undefined;
 
+    // Do we already hold a deal WITH THIS CARRIER? Then the numbers are settled
+    // and the call is about a change, not a negotiation. Volta must state the
+    // agreed figures rather than quoting new ones — without this it happily
+    // offered a booked carrier a lower price than the one they had shaken on.
+    const booking =
+      neg && isBookedCarrier(neg.carrierId, this.callId) ? currentBooking() : null;
+
     const instructions = isIntake
       ? buildIntakeInstructions()
       : buildInstructions(call.mandate ?? DEFAULT_MANDATE, {
-          carrierName: neg?.carrierName || undefined,
+          carrierName: neg?.carrierName || booking?.carrierName || undefined,
           collectingQuotes: Boolean(neg?.roundId) && !this.confirming,
           confirming: this.confirming,
           standingOffer: previous,
+          booking: booking
+            ? {
+                priceMxn: booking.priceMxn,
+                pickupTime: booking.pickupTime,
+                conditions: booking.conditions,
+              }
+            : undefined,
         });
     const tools = isIntake ? intakeToolDefinitions : toolDefinitions;
 
     console.log(
       `[realtime] call ${this.callId.slice(0, 8)} | phase=${this.phase} ` +
-        `script=${isIntake ? "intake" : "negotiate"} transport=${this.transport}`
+        `script=${isIntake ? "intake" : booking ? "booked-carrier" : "negotiate"} ` +
+        `transport=${this.transport}`
     );
 
+    this.openSession(instructions, tools);
+  }
+
+  // Send session.update with the chosen script + tools, then let Volta open the
+  // conversation. Shared by every phase.
+  private openSession(instructions: string, tools: unknown) {
     this.send({
       type: "session.update",
       session: {
@@ -321,6 +380,22 @@ export class RealtimeBridge {
       this.cb.onEvent("carrier_refusal", result);
     }
 
+    // A booked carrier asked for something. If it fits the mandate Volta just
+    // accepted it; if not, the transport has to ring the client after this call.
+    if (evt.name === "request_change") {
+      const kind = (result as any).withinMandate
+        ? "change_auto_accepted"
+        : "change_needs_provider";
+      log(this.callId, kind, result);
+      this.cb.onEvent(kind, result);
+    }
+
+    // The client answered: the transport rings the carrier back with the verdict.
+    if (evt.name === "record_provider_decision" && (result as any).ok) {
+      log(this.callId, "provider_decided", result);
+      this.cb.onEvent("provider_decided", result);
+    }
+
     // Hand the result back to the model.
     this.send({
       type: "conversation.item.create",
@@ -334,8 +409,17 @@ export class RealtimeBridge {
     // end_intake / end_negotiation: Volta already said its closing line. We do
     // not ask for another response; we flag that we must hang up and let the
     // transport wait until the last audio has finished playing.
-    if (evt.name === "end_intake" || evt.name === "end_negotiation") {
-      const kind = evt.name === "end_intake" ? "intake_done" : "negotiation_done";
+    if (
+      evt.name === "end_intake" ||
+      evt.name === "end_negotiation" ||
+      evt.name === "end_escalation"
+    ) {
+      const kind =
+        evt.name === "end_intake"
+          ? "intake_done"
+          : evt.name === "end_escalation"
+            ? "escalation_done"
+            : "negotiation_done";
       log(this.callId, kind, result);
       this.cb.onEvent(kind, result);
       this.pendingFinal = true;

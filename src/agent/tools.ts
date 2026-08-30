@@ -14,6 +14,7 @@ import {
   getNegotiation,
   resetNegotiations,
 } from "../store/negotiations.js";
+import { evaluateChange, resolveChange } from "../negotiation/escalation.js";
 import type { NegotiationMandate, Proposal } from "../domain/types.js";
 
 function num(v: unknown): number | undefined {
@@ -100,6 +101,54 @@ export const intakeToolDefinitions = [
     description:
       "End the call with the client. Call this only AFTER set_negotiation_mandate " +
       "succeeded and you have said your closing line.",
+    parameters: { type: "object", properties: {} },
+  },
+] as const;
+
+// ---------------------------------------------------------------------------
+// ESCALATION tools — Volta calls the PROVIDER because a booked carrier changed
+// something it is not authorised to accept. The only outcome that matters is
+// the provider's yes or no.
+// ---------------------------------------------------------------------------
+export const escalationToolDefinitions = [
+  {
+    type: "function",
+    name: "record_provider_decision",
+    description:
+      "Record the client's answer to the carrier's change. Call this as soon as " +
+      "they have clearly said yes or no — do not guess, and do not call it while " +
+      "they are still thinking out loud.",
+    parameters: {
+      type: "object",
+      properties: {
+        approved: {
+          type: "boolean",
+          description: "True if the client accepts the carrier's change.",
+        },
+        note: {
+          type: "string",
+          description: "Anything they said about why, or a condition they attached.",
+        },
+      },
+      required: ["approved"],
+    },
+  },
+  {
+    type: "function",
+    name: "record_call_note",
+    description: "Log something relevant the client said.",
+    parameters: {
+      type: "object",
+      properties: { note: { type: "string" } },
+      required: ["note"],
+    },
+  },
+  {
+    type: "function",
+    name: "end_escalation",
+    description:
+      "End the call with the client. Call this only AFTER record_provider_decision " +
+      "and after you have said your closing line.",
     parameters: { type: "object", properties: {} },
   },
 ] as const;
@@ -202,6 +251,38 @@ export const toolDefinitions = [
             "'MXN 500 detention fee after 2h').",
         },
         note: { type: "string", description: "Anything else worth recording." },
+      },
+      required: [],
+    },
+  },
+  {
+    type: "function",
+    name: "request_change",
+    description:
+      "Call this when a carrier you have ALREADY BOOKED tells you something has " +
+      "changed: a different price, a pickup that moves, a new condition, or that " +
+      "they cannot do the job at all (truck broken, cannot reach the destination). " +
+      "Pass only what changed. The result tells you whether the change still fits " +
+      "what the client authorised — if it does, you accept it yourself; if it does " +
+      "not, you must tell the carrier you need to check with the client and end the " +
+      "call. Do NOT decide that yourself.",
+    parameters: {
+      type: "object",
+      properties: {
+        priceMxn: { type: "number", description: "The NEW price they are asking, in MXN." },
+        pickupTime: { type: "string", description: "The NEW pickup date/time (ISO 8601)." },
+        conditions: {
+          type: "array",
+          items: { type: "string" },
+          description: "New conditions or surcharges they are attaching.",
+        },
+        cannotDo: {
+          type: "boolean",
+          description:
+            "True if they cannot do the job at all — broken truck, cannot reach " +
+            "the destination, no driver.",
+        },
+        note: { type: "string", description: "What they said, in one line." },
       },
       required: [],
     },
@@ -343,6 +424,65 @@ export async function runTool(
           ? Math.round(Number(args.priceMxn))
           : undefined,
       };
+      break;
+    }
+
+    // A booked carrier is changing the deal. Whether Volta can wave it through
+    // or has to ask the client is decided in code (negotiation/escalation.ts),
+    // never by the model.
+    case "request_change": {
+      const change = evaluateChange({
+        mandate: call.mandate,
+        carrierId: getNegotiation(callId)?.carrierId,
+        carrierName: getNegotiation(callId)?.carrierName,
+        requested: {
+          priceMxn: num(args.priceMxn),
+          pickupTime: args.pickupTime || undefined,
+          conditions: strArray(args.conditions),
+          cannotDo: args.cannotDo === true,
+          note: args.note || undefined,
+        },
+      });
+
+      result = {
+        withinMandate: change.withinMandate,
+        decision: change.withinMandate ? "accept_yourself" : "must_ask_the_client",
+        reasons: change.reasons,
+        agreed: change.agreed,
+        instruction: change.withinMandate
+          ? "This still fits what the client authorised. Accept it on this call, " +
+            "confirm the new terms out loud, and close normally."
+          : "You CANNOT accept this. Tell the carrier you need to check with the " +
+            "client who ordered the truck, that you will call them back shortly, " +
+            "thank them and end the call with end_negotiation.",
+      };
+      break;
+    }
+
+    // The provider answered an escalation: yes or no to the carrier's change.
+    case "record_provider_decision": {
+      const approved = args.approved === true;
+      const resolved = resolveChange(approved, args.note || undefined);
+      if (!resolved) {
+        result = { error: "no_pending_change" };
+        break;
+      }
+      result = {
+        ok: true,
+        ending: true,
+        approved,
+        carrierName: resolved.carrierName,
+        instruction: approved
+          ? "Tell the client you'll confirm it with the carrier now, thank them, " +
+            "and call end_escalation."
+          : "Tell the client you'll cancel with the carrier and come back with " +
+            "other options, thank them, and call end_escalation.",
+      };
+      break;
+    }
+
+    case "end_escalation": {
+      result = { ok: true, ending: true };
       break;
     }
 

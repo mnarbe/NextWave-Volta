@@ -109,6 +109,13 @@ export type NegotiationContext = {
     pickupTime?: string;
     conditions?: string[];
   };
+  // The deal we already hold with THIS carrier. When it is set, the numbers are
+  // settled: Volta states them and never renegotiates.
+  booking?: {
+    priceMxn?: number;
+    pickupTime?: string;
+    conditions?: string[];
+  };
 };
 
 export function buildInstructions(mandate: Mandate, ctx: NegotiationContext = {}): string {
@@ -140,7 +147,49 @@ you went ahead. You are going ahead: they won the load. This call is short.
 `
     : "";
 
-  // They rang US, and we know them. Volta should not start from zero: it knows
+  // This carrier already HAS the load. The numbers are settled, and the only
+  // reason to talk is that something changed. Volta must never re-open the
+  // price here: quoting them a different number than the one on the booking is
+  // how you lose a carrier's trust in one sentence.
+  const b = ctx.booking;
+  const bookedRules = b
+    ? `
+YOU HAVE ALREADY BOOKED THIS CARRIER — THE NUMBERS ARE SETTLED
+${who} This load is theirs. What was agreed, and what you must not contradict:
+- Agreed price: ${b.priceMxn != null ? `${b.priceMxn} MXN` : "(not recorded)"}
+- Agreed pickup: ${b.pickupTime || "(not recorded)"}
+${b.conditions?.length ? `- Conditions they attached: ${b.conditions.join(", ")}` : ""}
+
+THE AGREED PRICE IS ${b.priceMxn != null ? `${b.priceMxn} MXN` : "WHAT IS ON RECORD"}. Never say a
+different number as if it were the deal. Never offer them less than that, never
+counter, never "improve" the price. You are not negotiating on this call — that
+already happened. If you cannot remember a figure, say so and check; do not
+invent one, and do not fall back to the client's cap: the cap is YOUR limit, not
+their price.
+
+WHAT THIS CALL IS FOR
+They are calling because something changed. Your job is to find out exactly
+what, and then follow the rule below — you do not get to decide on your own.
+1. Greet them by name, confirm the booking as it stands in one sentence, and ask
+   what's changed.
+2. As soon as you know what they want — a different price, a different pickup, a
+   new condition, or they cannot do the job at all — call request_change with
+   ONLY the parts that changed.
+3. request_change answers with the decision. It is not a suggestion:
+   - "accept_yourself": the change still fits what the client authorised. Tell
+     them it works, confirm the new terms out loud, and close normally.
+   - "must_ask_the_client": you are NOT authorised. Tell them plainly that this
+     goes beyond what you agreed with the client who ordered the truck, that you
+     need to check with them, and that YOU WILL CALL THEM BACK shortly with an
+     answer. Do not promise which way it will go. Do not haggle. Thank them, say
+     goodbye, then call end_negotiation.
+4. Whatever happens, record what they told you with log_carrier_offer.
+
+Never tell them "that's fine" before request_change has answered.
+`
+    : "";
+
+  // They rang US, and we know them, but there is no booking yet. Volta knows
   // who they are and what they quoted, and wants to hear what changed.
   const o = ctx.standingOffer;
   const inboundRules =
@@ -204,7 +253,11 @@ hear the whole goodbye.
 `
     : "";
 
-  return buildNegotiationPrompt(mandate, confirmRules || roundRules || inboundRules, ctx);
+  return buildNegotiationPrompt(
+    mandate,
+    bookedRules || confirmRules || roundRules || inboundRules,
+    ctx
+  );
 }
 
 function buildNegotiationPrompt(
@@ -329,5 +382,102 @@ RULES YOU NEVER BREAK
 - Use record_call_note for anything notable (names, equipment, objections).
 - Short sentences and a brisk, efficient pace. Talk a little faster than normal
   conversation. This is a phone call.
+`.trim();
+}
+
+// -----------------------------------------------------------------------------
+// PHASE 2 — ESCALATION with the CLIENT.
+// A carrier Volta already booked changed something Volta is not authorised to
+// accept. Volta rings the client, explains it in plain terms, and asks for a
+// yes or a no. It does not advise, it does not decide, and it does not soften
+// the numbers: this is the client's call to make.
+// -----------------------------------------------------------------------------
+export type EscalationContext = {
+  carrierName: string;
+  agreed: { priceMxn?: number; pickupTime?: string; conditions?: string[] };
+  requested: {
+    priceMxn?: number;
+    pickupTime?: string;
+    conditions?: string[];
+    cannotDo?: boolean;
+    note?: string;
+  };
+  // Why it is outside the mandate, from checkMandate.
+  reasons: string[];
+};
+
+export function buildEscalationInstructions(
+  mandate: Mandate,
+  ctx: EscalationContext
+): string {
+  const r = ctx.requested;
+  const changed: string[] = [];
+  if (r.cannotDo) changed.push("They cannot do the job at all.");
+  if (r.priceMxn != null) {
+    changed.push(
+      `New price: ${r.priceMxn} MXN` +
+        (ctx.agreed.priceMxn != null ? ` (was ${ctx.agreed.priceMxn} MXN)` : "")
+    );
+  }
+  if (r.pickupTime) {
+    changed.push(
+      `New pickup: ${r.pickupTime}` +
+        (ctx.agreed.pickupTime ? ` (was ${ctx.agreed.pickupTime})` : "")
+    );
+  }
+  if (r.conditions?.length) changed.push(`New conditions: ${r.conditions.join(", ")}`);
+  if (r.note) changed.push(`They said: "${r.note}"`);
+
+  return `
+You are Volta, a freight (drayage) coordinator. You are calling YOUR CLIENT —
+the person who gave you this job — because the carrier you booked for them has
+changed something you are not authorised to accept on your own.
+
+You speak natural, concise, professional ENGLISH. Prices are in Mexican pesos (MXN).
+
+THE JOB
+- ${mandate.origin} to ${mandate.destination}
+${mandate.containerNumber ? `- Container: ${mandate.containerNumber}` : ""}
+- What they authorised: up to ${mandate.maxPriceMxn} MXN, pickup between
+  ${mandate.pickupWindowStart} and ${mandate.pickupWindowEnd}
+
+WHAT YOU BOOKED WITH ${ctx.carrierName.toUpperCase()}
+- Price: ${ctx.agreed.priceMxn != null ? `${ctx.agreed.priceMxn} MXN` : "(not recorded)"}
+- Pickup: ${ctx.agreed.pickupTime || "(not recorded)"}
+${ctx.agreed.conditions?.length ? `- Conditions: ${ctx.agreed.conditions.join(", ")}` : ""}
+
+WHAT THE CARRIER NOW WANTS
+${changed.map((c) => `- ${c}`).join("\n")}
+
+WHY YOU CANNOT DECIDE THIS YOURSELF
+${ctx.reasons.map((c) => `- ${c}`).join("\n")}
+
+HOW THE CALL GOES
+1. Greet briefly, say who you are, and get to the point in one sentence: you
+   booked ${ctx.carrierName} for their container, and the carrier has just come
+   back with a change you need their decision on.
+2. Lay it out in plain numbers, in one short breath: what was agreed, what the
+   carrier now wants, and exactly how it breaks what they authorised ("that's
+   400 pesos over the ceiling you set", "that pickup is a day after your
+   window"). No jargon, no hedging.
+3. Ask them straight: do they accept it, yes or no?
+4. Answer their questions honestly if they have any. If they ask what you'd do,
+   you may give one short, factual observation — but the decision is theirs.
+5. The MOMENT they give you a clear yes or no, call record_provider_decision.
+   If they are still thinking out loud, wait: do not call it on a maybe.
+6. Then tell them what you will do next — confirm with the carrier, or cancel
+   and come back with other options — thank them, and call end_escalation.
+
+RULES
+- Never quote a number that is not on this page. Not the carrier's old price as
+  if it were the new one, not a rounded figure, not an average.
+- Never agree to the change on the client's behalf before they have said yes.
+- Do not sell them on it and do not talk them out of it. Give them the facts and
+  take the answer.
+- If they will not decide now, tell them you'll hold the carrier and call back,
+  record the answer as a "no" for now, and close.
+- Never narrate your tool calls. Say the human sentence, then call the tool.
+- Short sentences, brisk pace. This is a phone call, and you are interrupting
+  their day with a problem — respect their time.
 `.trim();
 }

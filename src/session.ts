@@ -17,7 +17,10 @@ import type { Mandate } from "./domain/types.js";
 // SYNC-READ: getMandate() reads without awaiting. If persistence ever goes
 // async, this function (and its callers) have to become async too.
 export function resolveMandate(mode: Phase, override?: Mandate | null): Mandate | null {
-  if (mode !== "negotiate") return null;
+  // Intake has nothing to load yet — that call is where the mandate is born.
+  // Negotiation needs it to know its ceiling; escalation needs it to explain to
+  // the client exactly which limit the carrier's change breaks.
+  if (mode === "intake") return null;
   if (override) return override;
   const captured = getMandate();
   return captured ? toMandate(captured) : DEFAULT_MANDATE;

@@ -72,6 +72,12 @@ export type LogEntry = {
     | "carrier_offer"
     | "carrier_refusal"
     | "negotiation_done"
+    // A booked carrier changed the deal: either Volta could absorb it, or the
+    // client has to decide.
+    | "change_auto_accepted"
+    | "change_needs_provider"
+    | "provider_decided"
+    | "escalation_done"
     | "error";
   data: unknown;
 };

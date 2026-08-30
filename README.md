@@ -105,6 +105,25 @@ Whether a quote counts is decided in code, not by the model: a price at or below
 the cap is usable, even when the model would have called it a "no deal". Leaving
 that to the prompt silently dropped good carriers from the comparison.
 
+
+## When a booked carrier changes the deal
+
+The carrier you booked calls back: the price went up, the pickup slipped, the
+truck broke. Volta checks the new picture against the mandate the client gave
+it — in code, in `src/negotiation/escalation.ts`, never by asking the model:
+
+- **Still inside the mandate** (price under the cap, pickup in the window, no
+  forbidden condition): Volta accepts it on the call and moves on.
+- **Outside it**: Volta is not authorised. It tells the carrier it has to check
+  with the client, calls the provider, lays out what was agreed against what
+  the carrier now wants and which limit it breaks, and asks for a yes or no.
+  Their answer sends Volta back to the carrier — to confirm, or to cancel.
+
+On a call with a carrier who already holds the load, the agreed price is
+injected into the prompt and Volta is forbidden from quoting any other number.
+Without that it would cheerfully offer a booked carrier less than they had
+already shaken hands on.
+
 ---
 
 ## Setup
