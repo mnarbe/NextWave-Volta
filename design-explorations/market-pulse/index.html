@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Volta — Market Pulse</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="refinements.css">
+</head>
+<body data-scenario="winner">
+  <a class="skip" href="#market">Saltar al mercado</a>
+  <header>
+    <a class="brand" href="../">VOLTA</a><span class="pulse-label"><i></i> Mercado en vivo</span>
+    <nav aria-label="Probar estados">
+      <button data-scenario="winner" aria-pressed="true">Resultado</button>
+      <button data-scenario="none">Sin ganador</button>
+      <button data-scenario="review">Intervención</button>
+      <button data-scenario="offline">Desconectado</button>
+    </nav>
+  </header>
+
+  <div class="offline-bar" role="status"><span class="offline-copy">Backend conectado</span><button class="reconnect">Reconectar</button></div>
+
+  <main>
+    <section class="context">
+      <div><p class="eyebrow">Ruta</p><h1>Manzanillo → Guadalajara</h1></div>
+      <dl><div><dt>Contenedor</dt><dd>MSCU1234567</dd></div><div><dt>Retiro</dt><dd>03 SEP · 08:00–18:00</dd></div><div><dt>Máximo</dt><dd>$9.000 MXN</dd></div></dl>
+      <button class="mandate-toggle" aria-expanded="false">Ver mandato</button>
+      <div class="mandate-detail"><span>Sin prepago</span><span>Seguro obligatorio</span></div>
+    </section>
+
+    <section class="decision" aria-live="polite">
+      <div class="winner-copy"><p class="eyebrow">Decisión determinística</p><h2>Fletes del Norte</h2><strong>$8.700 <i>MXN</i></strong><span>Menor precio elegible</span></div>
+      <div class="review-copy"><p class="eyebrow">Requiere intervención</p><h2>Sin ganador limpio</h2><span>Precio, horario o condiciones fuera del mandato</span></div>
+      <button class="decision-action">Confirmar ganador</button>
+    </section>
+
+    <section id="market" class="market" aria-labelledby="market-title">
+      <div class="market-head"><div><p class="eyebrow">Comparación central</p><h2 id="market-title">El precio importa. La validez decide.</h2></div><span class="active-call"><i></i> Llamada activa · 02:47</span></div>
+      <div class="price-field">
+        <div class="axis"><span>$8.000</span><span>$8.500</span><span>$9.000</span><span>$9.500</span></div>
+        <div class="cap-line"><span>Máximo del mandato</span><b>$9.000</b></div>
+
+        <button class="marker pacifico" aria-expanded="false" data-carrier="pacifico">
+          <span class="dot"></span><span class="price">$8.250</span><span class="name">Transportes del Pacífico</span><span class="state">Fuera de horario</span>
+        </button>
+        <button class="marker norte" aria-expanded="false" data-carrier="norte">
+          <span class="dot"></span><span class="price">$8.700</span><span class="name">Fletes del Norte</span><span class="state">Elegible · a tiempo</span>
+        </button>
+        <button class="marker you" aria-expanded="false" data-carrier="you">
+          <span class="new">Nueva oferta</span><span class="dot"></span><span class="price">$9.400</span><span class="name">You (carrier)</span><span class="state">Sobre el máximo</span>
+        </button>
+      </div>
+    </section>
+
+    <section class="eligibility" aria-labelledby="eligibility-title">
+      <div class="eligibility-head"><div><p class="eyebrow">Reglas de elegibilidad</p><h2 id="eligibility-title">Por qué $8.250 no gana</h2></div><span>Se elige la menor oferta que cumple todo.</span></div>
+      <div class="carrier-columns">
+        <article class="eligibility-card pacifico-card">
+          <h3>Transportes del Pacífico</h3><p class="result fail">Descartada</p>
+          <ul><li class="pass">Precio dentro del máximo</li><li class="fail">Retiro fuera de ventana</li><li class="pass">Condiciones permitidas</li></ul>
+        </article>
+        <article class="eligibility-card norte-card">
+          <h3>Fletes del Norte</h3><p class="result pass">Elegible</p>
+          <ul><li class="pass">Precio dentro del máximo</li><li class="pass">Retiro dentro de ventana</li><li class="pass">Condiciones permitidas</li></ul>
+        </article>
+        <article class="eligibility-card you-card">
+          <h3>You (carrier)</h3><p class="result warn">Negociando</p>
+          <ul><li class="fail">Precio sobre el máximo</li><li class="pass">Retiro dentro de ventana</li><li class="pass">Condiciones permitidas</li></ul>
+        </article>
+      </div>
+    </section>
+
+    <footer>
+      <details><summary>Historial de ofertas</summary><p>9.800 → 9.400 · última oferta recibida ahora</p></details>
+      <details><summary>Transcripción</summary><p>La transcripción se mantiene como evidencia secundaria.</p></details>
+      <details><summary>Actividad técnica · JSON</summary><pre>{ "pickupDelayDays": 1 }</pre></details>
+    </footer>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
