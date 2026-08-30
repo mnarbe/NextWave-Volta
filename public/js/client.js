@@ -15,6 +15,7 @@ let ws = null;
 let micMode = false;      // is this tab acting as the line, via microphone?
 let activeCallSid = null; // phone call in flight (for the Hang up button)
 let roundMode = false;    // a parallel carrier round is running
+let lineName = "Main line"; // label for the live (phone/browser) lane
 
 // --- connection --------------------------------------------------------------
 // Connects on page load, WITHOUT a microphone: it listens to the events of every
@@ -53,15 +54,26 @@ function onServerMessage(ev) {
 
   const phone = msg.transport === "phone";
 
+  // The scripted carriers also emit plain *_transcript events; their
+  // carrier_transcript twin carries the name, so we only paint that one.
+  const live = { callId: msg.callId, name: lineName };
+
   switch (msg.kind) {
-    case "user_transcript": view.addMessage("user", msg.data); break;
-    case "agent_transcript": view.addMessage("agent", msg.data); break;
+    case "user_transcript":
+      if (msg.transport !== "sim") view.addMessage("user", msg.data, live);
+      break;
+    case "agent_transcript":
+      if (msg.transport !== "sim") view.addMessage("agent", msg.data, live);
+      break;
 
     // --- round --------------------------------------------------------------
     // One scripted carrier said a line (Volta or the dispatcher persona).
     case "carrier_transcript": {
       const d = msg.data || {};
-      view.addMessage(d.role === "volta" ? "agent" : "user", `[${d.carrierName}] ${d.text}`);
+      view.addMessage(d.role === "volta" ? "agent" : "user", d.text, {
+        callId: msg.callId,
+        name: d.carrierName,
+      });
       break;
     }
 
@@ -82,6 +94,7 @@ function onServerMessage(ev) {
       activeCallSid = (msg.data && msg.data.callSid) || null;
       view.setHangupVisible(Boolean(activeCallSid));
       view.setPhase(mode === "negotiate" ? "negotiate" : "intake");
+      lineName = mode === "negotiate" ? "Human carrier" : "Client · intake";
       break;
     }
 
@@ -100,13 +113,13 @@ function onServerMessage(ev) {
 
     // --- a booked carrier changed the deal ------------------------------------
     case "change_auto_accepted":
-      view.addMessage("agent", "— change accepted: still within what the client authorised —");
+      view.addMessage("agent", "— change accepted: still within what the client authorised —", live);
       view.addTool("tool_result", { name: "request_change", result: msg.data });
       break;
 
     case "change_needs_provider":
       view.setPhoneState("change needs the client's decision", "err");
-      view.addMessage("agent", `— cannot accept this: ${(msg.data.reasons || [])[0] || ""} —`);
+      view.addMessage("agent", `— cannot accept this: ${(msg.data.reasons || [])[0] || ""} —`, live);
       view.addTool("tool_result", { name: "request_change", result: msg.data });
       break;
 
@@ -170,7 +183,7 @@ function onServerMessage(ev) {
     case "intake_done":
       el.forceCutBtn.hidden = true;
       view.setMandateDone("Intake complete — Volta hung up with the client.");
-      view.addMessage("agent", "— end of intake —");
+      view.addMessage("agent", "— end of intake —", live);
       // Over the phone Volta rings the same number back as the carrier; the
       // handoff_* events below take it from here. In browser mode we simulate
       // the inbound call like before.
@@ -194,7 +207,8 @@ function onServerMessage(ev) {
       const who = msg.data && msg.data.carrier && msg.data.carrier.carrierName;
       view.addMessage(
         "agent",
-        `— ${who ? who + ": " : ""}end of negotiation · ${outcome === "deal" ? "deal closed" : "no deal"} —`
+        `— end of negotiation · ${outcome === "deal" ? "deal closed" : "no deal"} —`,
+        { callId: msg.callId, name: who || lineName }
       );
       // Only the browser-mic line should stop the mic; sim closings must not.
       if (msg.transport === "browser") setTimeout(stopMic, 900);
@@ -308,6 +322,7 @@ async function answerCall() {
     el.stopBtn.disabled = false;
   }
   view.setPhase("negotiate");
+  lineName = "Human carrier";
   view.addMessage("user", "— you answered the call (you are the carrier) —");
   send({ type: "start", mode: "negotiate" });
 }
@@ -358,10 +373,12 @@ el.answerBtn.onclick = () => answerCall().catch((e) => alert(e.message));
 el.forceCutBtn.onclick = forceCut;
 el.callBtn.onclick = callCarrier;
 el.hangBtn.onclick = hangupCall;
+el.splitBtn.onclick = view.toggleSplit;
 el.carrierNum.onkeydown = (e) => {
   if (e.key === "Enter" && !el.callBtn.disabled) callCarrier();
 };
 
+view.initConversation();
 view.loadInitialState();
 checkPhone();
 connect();

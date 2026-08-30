@@ -25,12 +25,14 @@ export const ui = {
   carrierName: document.getElementById("carrierName"),
   callBtn: document.getElementById("callBtn"),
   hangBtn: document.getElementById("hangBtn"),
+  splitBtn: document.getElementById("splitBtn"),
 };
 
 const phaseChip = document.getElementById("phaseChip");
 const hintEl = document.getElementById("hintEl");
 const incoming = document.getElementById("incoming");
 const convo = document.getElementById("convo");
+const convoTabs = document.getElementById("convoTabs");
 const toolsEl = document.getElementById("tools");
 const mandateCard = document.getElementById("mandateCard");
 const mPrice = document.getElementById("mPrice");
@@ -99,15 +101,107 @@ export function setHangupVisible(on) {
   ui.hangBtn.hidden = !on;
 }
 
-// --- conversation and backend activity ---------------------------------------
-export function addMessage(who, text) {
+// --- conversation lanes ------------------------------------------------------
+// A round talks to several carriers AT THE SAME TIME, so a single column of
+// messages is unreadable. Every callId gets its own lane; the tab bar switches
+// between them and "Split" shows them side by side. Lane "all" keeps the old
+// single-stream view.
+const lanes = new Map(); // laneId -> { id, name, body, unread }
+let activeLane = "all";
+let splitView = false;
+
+function laneOf(id, name) {
+  let lane = lanes.get(id);
+  if (!lane) {
+    const body = document.createElement("div");
+    body.className = "lane";
+    body.dataset.lane = id;
+    body.innerHTML = `<div class="lane-title"></div><div class="lane-msgs"></div>`;
+    convo.appendChild(body);
+    lane = { id, name: name || (id === "all" ? "All lines" : "Line"), body, unread: 0 };
+    lanes.set(id, lane);
+    applyLanes();
+  }
+  if (name && lane.name !== name) {
+    lane.name = name;
+    renderTabs();
+    applyLanes();
+  }
+  return lane;
+}
+
+function laneVisible(id) {
+  return splitView || activeLane === id;
+}
+
+function renderTabs() {
+  convoTabs.innerHTML = "";
+  for (const lane of lanes.values()) {
+    const b = document.createElement("button");
+    b.className = "tab" + (!splitView && activeLane === lane.id ? " on" : "");
+    b.textContent = lane.name + (lane.unread ? ` (${lane.unread})` : "");
+    b.onclick = () => {
+      splitView = false;
+      activeLane = lane.id;
+      lane.unread = 0;
+      renderTabs();
+      applyLanes();
+    };
+    convoTabs.appendChild(b);
+  }
+}
+
+function applyLanes() {
+  convo.classList.toggle("split", splitView);
+  for (const lane of lanes.values()) {
+    lane.body.hidden = !laneVisible(lane.id);
+    lane.body.querySelector(".lane-title").textContent = lane.name;
+    if (laneVisible(lane.id)) lane.unread = 0;
+  }
+  ui.splitBtn.classList.toggle("on", splitView);
+  renderTabs();
+}
+
+export function toggleSplit() {
+  splitView = !splitView;
+  applyLanes();
+}
+
+function bubble(who, text) {
   const d = document.createElement("div");
   d.className = "msg " + (who === "user" ? "user" : "agent");
   d.innerHTML = `<div class="who">${who === "user" ? "Other party" : "Volta"}</div>${escapeHtml(text)}`;
-  convo.appendChild(d);
-  convo.scrollTop = convo.scrollHeight;
+  return d;
 }
 
+function push(lane, who, text) {
+  const box = lane.body.querySelector(".lane-msgs");
+  box.appendChild(bubble(who, text));
+  box.scrollTop = box.scrollHeight;
+  if (!laneVisible(lane.id)) {
+    lane.unread++;
+    renderTabs();
+  }
+}
+
+// opts: { callId, name } — which line said it, and how to label that line.
+export function addMessage(who, text, opts = {}) {
+  push(laneOf("all"), who, opts.name ? `[${opts.name}] ${text}` : text);
+  if (opts.callId) push(laneOf(opts.callId, opts.name), who, text);
+}
+
+// Drop every lane but "All" (a new job starts from scratch).
+export function resetLanes() {
+  for (const lane of [...lanes.values()]) {
+    if (lane.id === "all") continue;
+    lane.body.remove();
+    lanes.delete(lane.id);
+  }
+  activeLane = "all";
+  applyLanes();
+}
+
+// --- backend activity --------------------------------------------------------
 export function addTool(kind, data) {
   const d = document.createElement("div");
   d.className = "tool";
@@ -333,6 +427,7 @@ export function refreshNegotiations() {
 
 export function clearNegotiations() {
   negs.clear();
+  resetLanes();
   roundResult = null;
   renderCarriers();
   renderDecision();
@@ -350,6 +445,11 @@ export function hideIncomingCall() {
 }
 
 // On load: previous mandate (sets the cap), then previous negotiations.
+export function initConversation() {
+  laneOf("all", "All lines");
+  applyLanes();
+}
+
 export function loadInitialState() {
   return fetch("/mandate")
     .then((r) => r.json())

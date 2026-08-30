@@ -128,3 +128,23 @@
                         border-radius: 6px; padding: 6px 10px; font-size: 13px; width: 180px; }
   .phonebar input.tel.name { width: 150px; }
   .phonebar input.tel:focus { outline: none; border-color: #2f6fed; }
+
+  /* --- conversation lanes ---------------------------------------------------
+     A round negotiates with several carriers at once. Each call gets its own
+     lane: the tab bar switches between them, "Split" lays them side by side. */
+  .convo-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 10px;
+               flex-wrap: wrap; }
+  .convo-bar .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+  .convo-bar .spacer { flex: 1; }
+  button.tab, button.ghost { padding: 4px 10px; font-size: 12px; border-radius: 20px;
+                             background: #12161f; color: #8a90a0; }
+  button.tab.on, button.ghost.on { background: #1b2537; color: #7fb4ff;
+                                   border-color: #2f6fed; }
+  #convo.split { display: grid; gap: 12px;
+                 grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  #convo.split .lane { border: 1px solid #2b3040; border-radius: 12px; padding: 10px; }
+  #convo.split .lane-title { display: block; }
+  .lane-title { display: none; font-size: 11px; text-transform: uppercase;
+                letter-spacing: .08em; color: #8a90a0; margin-bottom: 8px; }
+  #convo.split .lane-msgs { max-height: 46vh; overflow-y: auto; }
+  #convo.split .msg { max-width: 100%; font-size: 13px; }
