@@ -7,6 +7,7 @@
 import { Router } from "express";
 
 import { startRound, peekPendingHumanCarrier } from "../negotiation/round.js";
+import { localOnly } from "./local-only.js";
 import { getAllNegotiations, getDecision, getRoundId } from "../store/negotiations.js";
 import { config } from "../config.js";
 
@@ -14,7 +15,7 @@ export const roundRoutes = Router();
 
 // Start a round. Body is optional: { carriers?: CarrierSpec[] } to override the
 // roster (otherwise data/carriers.json or the built-in demo roster).
-roundRoutes.post("/round/start", (req, res) => {
+roundRoutes.post("/round/start", localOnly, (req, res) => {
   try {
     const result = startRound({ roster: req.body?.carriers });
     console.log(

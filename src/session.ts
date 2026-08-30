@@ -39,6 +39,8 @@ export type SessionOptions = {
   clearAudio: () => void;
   // Volta finished its closing line: the transport decides how to hang up.
   onFinal: () => void;
+  // The bridge died mid-call; the transport should end the call.
+  onFailure?: (reason: string) => void;
   // Optional peek at the business events of THIS call, on top of the bus. The
   // phone transport uses it to know whether the brief was actually captured
   // before deciding what to do once the call ends.
@@ -72,6 +74,7 @@ export function startSession(opts: SessionOptions): Session {
         opts.onEvent?.(kind, data);
       },
       onFinal: opts.onFinal,
+      onFailure: opts.onFailure,
     },
     { phase: opts.mode, transport: opts.transport, intent: opts.intent }
   );

@@ -98,6 +98,12 @@ function handleDashboardSocket(browserWs: WebSocket) {
           clearAudio: () => toBrowser({ type: "clear" }),
           // No Twilio marks here: give the last audio time to play out.
           onFinal: () => setTimeout(() => session?.bridge.close(), 3500),
+          // The agent died mid-call: close instead of leaving a dead mic open.
+          onFailure: (reason) => {
+            console.error(`[ws] agent lost (${reason}) — closing`);
+            session?.bridge.close();
+            session = null;
+          },
         });
         toBrowser({
           type: "started",
