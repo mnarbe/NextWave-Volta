@@ -1,125 +1,71 @@
-<!doctype html>
-<html lang="es">
+<!DOCTYPE html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#151513">
-  <title>Volta — Living Manifest</title>
-  <link rel="stylesheet" href="styles.css">
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Volta — control tower</title>
+<!--
+  Structure only. Styles live in styles.css and behaviour in js/. If you add an
+  element the JS has to touch, give it an id and add it to the `ui` object at
+  the top of js/render.js.
+-->
+<link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <a class="skip-link" href="#manifest">Saltar al manifiesto</a>
-
-  <header class="topbar">
-    <div class="brand-lockup">
-      <h1>VOLTA</h1>
-      <span>Living Manifest</span>
-    </div>
-
-    <div class="live-context">
-      <span id="dot" class="dot" aria-hidden="true"></span>
-      <span id="phaseChip" class="phase-chip" hidden></span>
-      <span id="hintEl" class="hint">Esperando el mandato del cliente.</span>
-    </div>
-
-    <div class="primary-actions">
-      <button id="roundBtn" class="button button-outline">Iniciar ronda</button>
-      <button id="startBtn" class="button button-quiet">Modo navegador</button>
-      <button id="stopBtn" class="button button-quiet" disabled>Detener</button>
-      <button id="forceCutBtn" class="button button-coral" hidden>Finalizar intake</button>
-    </div>
+  <header>
+    <span id="dot" class="dot"></span>
+    <h1>Volta</h1>
+    <span id="phaseChip" class="chip" hidden></span>
+    <span id="hintEl" class="hint">Call Volta's number to hand over the job.</span>
+    <span class="spacer"></span>
+    <button id="roundBtn">▶ Start round</button>
+    <button id="startBtn">🎙 Browser mode</button>
+    <button id="stopBtn" disabled>Stop</button>
+    <button id="forceCutBtn" hidden>End intake →</button>
   </header>
 
-  <div id="connectionBanner" class="connection-banner" role="status">
-    <span>Backend desconectado · el manifiesto conserva el último estado.</span>
+  <div id="phoneBar" class="phonebar">
+    <span id="phoneNum" class="phone-num">phone: —</span>
+    <span id="phoneState" class="phone-state">no call</span>
+    <span class="spacer"></span>
+    <input id="carrierNum" class="tel" placeholder="+52 55 1234 5678" autocomplete="off" />
+    <input id="carrierName" class="tel name" placeholder="carrier (optional)" autocomplete="off" />
+    <button id="callBtn" class="primary" disabled>📞 Call the carrier</button>
+    <button id="hangBtn" hidden>Hang up</button>
   </div>
 
-  <section id="phoneBar" class="phonebar" aria-label="Controles de llamada">
-    <div class="phone-summary">
-      <span id="phoneNum" class="phone-num">Teléfono: —</span>
-      <span id="phoneState" class="phone-state">Sin llamada</span>
-    </div>
-    <details class="dialer">
-      <summary>Llamar a otro carrier</summary>
-      <div class="dialer-fields">
-        <label>Número<input id="carrierNum" class="tel" placeholder="+52 55 1234 5678" autocomplete="off" inputmode="tel"></label>
-        <label>Carrier<input id="carrierName" class="tel name" placeholder="Nombre opcional" autocomplete="off"></label>
-        <button id="callBtn" class="button button-coral" disabled>Llamar</button>
-      </div>
-    </details>
-    <button id="hangBtn" class="button button-outline" hidden>Colgar</button>
-  </section>
+  <!-- Simulated inbound call: only shows up in browser mode. -->
+  <div id="incoming" class="incoming" hidden>
+    <span class="ring">📞 Volta is calling you…</span>
+    <button id="answerBtn" class="primary">Answer</button>
+    <span class="hint">You are the carrier now. Name your price and haggle.</span>
+  </div>
 
-  <section id="incoming" class="incoming" hidden>
-    <div><span class="signal-dot" aria-hidden="true"></span><strong>Volta te está llamando</strong></div>
-    <button id="answerBtn" class="button button-moss">Responder como carrier</button>
-  </section>
-
-  <main id="manifest" class="workspace">
-    <section id="mandateCard" class="manifest-sheet empty" aria-labelledby="manifest-title">
-      <div class="sheet-heading">
-        <div>
-          <p class="eyebrow">Mandato del cliente</p>
-          <h2 id="manifest-title"><span id="routeOrigin">Origen</span><i>→</i><span id="routeDestination">Destino</span></h2>
-        </div>
-        <span class="stamp mandate-stamp">Mandato<br>pendiente</span>
-      </div>
-
-      <div id="mFields" class="manifest-facts">
-        <div><small>Contenedor</small><b>—</b></div>
-        <div><small>Retiro requerido</small><b>—</b><span>—</span></div>
-        <div class="max-fact"><small>Precio máximo</small><strong id="mPrice">—</strong><span>MXN</span></div>
-      </div>
-
-      <div id="mandateTerms" class="terms"><span>Esperando condiciones</span></div>
-      <div id="mStatus" class="mandate-status">Volta todavía no capturó el mandato.</div>
-
-      <section id="decision" class="decision-slip empty" aria-live="polite">
-        <p class="eyebrow">Decisión determinística</p>
-        <h3>La ronda todavía no cerró</h3>
-        <p>Cuando haya ofertas, Volta elegirá la menor que cumpla precio, horario y condiciones.</p>
-      </section>
-
-      <div class="rule-note">
-        <p class="eyebrow">Regla de adjudicación</p>
-        <p>Gana el menor precio que cumple máximo, horario y condiciones.</p>
-      </div>
+  <main>
+    <section>
+      <h2>Conversation</h2>
+      <div id="convo"></div>
     </section>
 
-    <section class="dispatch-board" aria-labelledby="dispatch-title">
-      <div class="dispatch-heading">
-        <div><p class="eyebrow">Negociaciones en curso</p><h2 id="dispatch-title">Despachos de carrier</h2></div>
-        <span class="call-indicator"><i aria-hidden="true"></i>Eventos en vivo</span>
+    <section>
+      <h2>Client brief</h2>
+      <div id="mandateCard" class="mandate empty">
+        <div class="price"><span id="mPrice">—</span><span class="cur">MXN</span></div>
+        <div class="price-label">maximum price</div>
+        <dl id="mFields"></dl>
+        <div id="mStatus" class="status">Waiting for Volta to capture it…</div>
       </div>
-      <div id="carriers" class="carriers-empty">
-        <p>Todavía no hay conversaciones con carriers.</p>
-      </div>
+
+      <h2>Final decision</h2>
+      <div id="decision" class="hint">No negotiation has closed yet.</div>
+
+      <h2>Carrier negotiation</h2>
+      <div id="carriers" class="hint">No carrier call yet.</div>
+
+      <h2>Backend activity</h2>
+      <div id="tools"></div>
     </section>
   </main>
-
-  <aside id="conversationDrawer" class="conversation-drawer" aria-hidden="true" aria-labelledby="drawerTitle">
-    <div class="drawer-header">
-      <div><p class="eyebrow">Conversación del carrier</p><h2 id="drawerTitle">Carrier</h2><span id="drawerStatus">—</span></div>
-      <button id="drawerClose" class="drawer-close" aria-label="Cerrar conversación">Cerrar</button>
-    </div>
-    <div class="drawer-offer"><small>Última oferta</small><strong id="drawerPrice">—</strong><span>MXN</span></div>
-
-    <nav class="drawer-tabs" aria-label="Contenido de la conversación">
-      <button class="drawer-tab active" data-drawer-tab="conversation" aria-pressed="true">Conversación</button>
-      <button class="drawer-tab" data-drawer-tab="evidence" aria-pressed="false">Evidencia</button>
-    </nav>
-
-    <section id="drawerConversation" class="drawer-panel active">
-      <div id="convo" class="conversation-stream"><p class="drawer-empty">Elegí un ticket para ver la conversación.</p></div>
-    </section>
-
-    <section id="drawerEvidence" class="drawer-panel">
-      <div id="drawerEvidenceBody" class="evidence-body"></div>
-      <details><summary>Historial de ofertas</summary><div id="drawerHistory"></div></details>
-      <details><summary>Actividad técnica</summary><div id="tools"></div></details>
-    </section>
-  </aside>
-  <button id="drawerScrim" class="drawer-scrim" hidden aria-label="Cerrar conversación"></button>
 
   <script type="module" src="js/client.js"></script>
 </body>
