@@ -113,6 +113,34 @@ export type CarrierFinal = {
   decidedAt: string;
 };
 
+// Who is on the carrier side of a negotiation.
+//   "human" = a person on the mic / phone (one of us in the demo).
+//   "sim"   = a scripted persona driven by a text LLM.
+export type CarrierKind = "human" | "sim";
+
+// A carrier as listed for a round. Personas only matter for "sim".
+export type SimPersona = {
+  // Opening quote the dispatcher names first, in MXN.
+  askPriceMxn: number;
+  // Hard floor: never commits below this, in MXN.
+  floorPriceMxn: number;
+  // Earliest pickup they can commit to (ISO). Omit = flexible, fits any window.
+  earliestPickup?: string;
+  // Conditions / surcharges they attach (e.g. "48h advance notice").
+  conditions?: string[];
+  // How hard they hold their price. "low" concedes fast, "high" barely moves.
+  stubbornness?: "low" | "medium" | "high";
+  // Free-text flavour for the persona's tone.
+  style?: string;
+};
+
+export type CarrierSpec = {
+  id: string;
+  name: string;
+  kind: CarrierKind;
+  persona?: SimPersona;
+};
+
 export type CarrierNegotiation = {
   callId: string;
   carrierName: string;
@@ -130,4 +158,42 @@ export type CarrierNegotiation = {
   status: "in_progress" | "deal" | "no_deal";
   final?: CarrierFinal;
   mandateSnapshot?: Mandate | null;
+  // Round bookkeeping (set when the negotiation is part of a round).
+  carrierId?: string;
+  kind?: CarrierKind;
+  roundId?: string;
+};
+
+// -----------------------------------------------------------------------------
+// ROUND — negotiating one mandate against several carriers at once, then
+// picking the winner. Persisted by store/negotiations.ts (db.decision).
+// -----------------------------------------------------------------------------
+
+// One carrier's standing in the comparison.
+export type RankedCarrier = {
+  callId: string;
+  carrierId?: string;
+  carrierName: string;
+  kind?: CarrierKind;
+  eligible: boolean;
+  outcome?: "deal" | "no_deal";
+  priceMxn?: number;
+  pickupDelayDays: number;
+  conditionCount: number;
+  // Why it is not eligible to win (empty when eligible).
+  disqualifiers: string[];
+};
+
+export type RoundComparison = {
+  outcome: "deal" | "no_deal";
+  winnerCallId?: string;
+  ranking: RankedCarrier[]; // eligible first (by price), then the rest
+  // Closed a deal but cannot win automatically (over cap, late, forbidden term).
+  needsHumanReview: { callId: string; carrierName: string; why: string }[];
+  reason: string;
+};
+
+export type RoundDecision = RoundComparison & {
+  roundId: string;
+  decidedAt: string;
 };

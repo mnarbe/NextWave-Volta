@@ -14,6 +14,7 @@ const el = view.ui; // the page's elements
 let ws = null;
 let micMode = false;      // is this tab acting as the line, via microphone?
 let activeCallSid = null; // phone call in flight (for the Hang up button)
+let roundMode = false;    // a parallel carrier round is running
 
 // --- connection --------------------------------------------------------------
 // Connects on page load, WITHOUT a microphone: it listens to the events of every
@@ -56,6 +57,21 @@ function onServerMessage(ev) {
     case "user_transcript": view.addMessage("user", msg.data); break;
     case "agent_transcript": view.addMessage("agent", msg.data); break;
 
+    // --- round --------------------------------------------------------------
+    // One scripted carrier said a line (Volta or the dispatcher persona).
+    case "carrier_transcript": {
+      const d = msg.data || {};
+      view.addMessage(d.role === "volta" ? "agent" : "user", `[${d.carrierName}] ${d.text}`);
+      break;
+    }
+
+    case "round_done":
+      roundMode = false;
+      view.renderRoundResult(msg.data);
+      view.setHint((msg.data && msg.data.reason) || "Round complete.");
+      view.addTool("tool_result", { name: "round_done", result: msg.data });
+      break;
+
     // --- phone calls ----------------------------------------------------------
     case "phone_call_started": {
       const mode = (msg.data && msg.data.mode) || "intake";
@@ -78,6 +94,8 @@ function onServerMessage(ev) {
 
     case "call_started":
       if (phone) view.addTool("tool_result", { name: "call started", result: msg.data });
+      // A round carrier (sim or the human placeholder) just opened: show its card.
+      if (msg.data && msg.data.carrier) view.refreshNegotiations();
       break;
 
     // --- handoff: after the intake, Volta calls the same number back ----------
@@ -137,11 +155,13 @@ function onServerMessage(ev) {
       const outcome = (msg.data && msg.data.outcome) || "no_deal";
       if (msg.data && msg.data.carrier) view.upsertNeg(msg.data.carrier);
       else view.refreshNegotiations();
+      const who = msg.data && msg.data.carrier && msg.data.carrier.carrierName;
       view.addMessage(
         "agent",
-        `— end of negotiation · ${outcome === "deal" ? "deal closed" : "no deal"} —`
+        `— ${who ? who + ": " : ""}end of negotiation · ${outcome === "deal" ? "deal closed" : "no deal"} —`
       );
-      if (!phone) setTimeout(stopMic, 900);
+      // Only the browser-mic line should stop the mic; sim closings must not.
+      if (msg.transport === "browser") setTimeout(stopMic, 900);
       break;
     }
 
@@ -239,13 +259,51 @@ function stopMic() {
   view.setPhase("idle");
 }
 
-// Intake is over: keep the mic alive and pretend Volta is calling the carrier.
-function answerCall() {
+// Intake is over (or a round is waiting for its human carrier): take Volta's
+// call as the carrier. Make sure the mic is live first — in a round the user may
+// not have gone through browser-mode intake.
+async function answerCall() {
   view.hideIncomingCall();
   clearAudio();
+  if (!micMode) {
+    micMode = true;
+    await startCapture((audio) => send({ type: "audio", audio }));
+    el.startBtn.disabled = true;
+    el.stopBtn.disabled = false;
+  }
   view.setPhase("negotiate");
   view.addMessage("user", "— you answered the call (you are the carrier) —");
   send({ type: "start", mode: "negotiate" });
+}
+
+// --- round -------------------------------------------------------------------
+// Kick off a parallel round: the scripted carriers start negotiating on the
+// backend right away; the human carrier (one of us) joins per the .env setting.
+async function startRound() {
+  el.roundBtn.disabled = true;
+  view.clearNegotiations();
+  try {
+    const res = await fetch("/round/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || "could not start the round");
+    roundMode = true;
+    view.refreshNegotiations();
+    if (body.humanCarrierTransport === "phone") {
+      view.setHint("Round running — call the human carrier's number from the bar above.");
+      el.carrierNum.focus();
+    } else {
+      view.setHint("Round running — you are the human carrier. Click Answer to take Volta's call.");
+      view.showIncomingCall();
+    }
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    el.roundBtn.disabled = false;
+  }
 }
 
 // Manual intake cut (if Volta does not call end_intake on its own).
@@ -259,7 +317,8 @@ function forceCut() {
 // --- boot ----------------------------------------------------------------------
 el.startBtn.onclick = () => startMic().catch((e) => { alert(e.message); stopMic(); });
 el.stopBtn.onclick = stopMic;
-el.answerBtn.onclick = answerCall;
+el.roundBtn.onclick = startRound;
+el.answerBtn.onclick = () => answerCall().catch((e) => alert(e.message));
 el.forceCutBtn.onclick = forceCut;
 el.callBtn.onclick = callCarrier;
 el.hangBtn.onclick = hangupCall;

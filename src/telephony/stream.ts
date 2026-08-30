@@ -22,6 +22,7 @@ import { publish } from "../bus.js";
 import { startSession } from "../session.js";
 import { forgetCarrier } from "./routing.js";
 import { scheduleCarrierCallback } from "./handoff.js";
+import { claimPendingHumanCarrier } from "../negotiation/round.js";
 import type { Phase } from "../agent/realtime.js";
 
 // Marker name we use to hang up only once Volta's closing line has played.
@@ -106,21 +107,18 @@ export function handleTwilioMedia(ws: WebSocket, req: IncomingMessage) {
         streamSid = msg.start?.streamSid || msg.streamSid || "";
         callSid = msg.start?.callSid || "";
 
-        // The <Parameter> values from the TwiML. These win over the query
-        // string: they are what Twilio actually guarantees to deliver.
-        const params = msg.start?.customParameters || {};
-        if (params.mode) mode = params.mode === "negotiate" ? "negotiate" : "intake";
-        if (params.peer) peer = String(params.peer);
-        if (params.carrier) carrierHint = String(params.carrier);
-
-        console.log(
-          `[stream] start | mode=${mode} peer=${peer || "(none)"} ` +
-            `source=${params.mode ? "customParameters" : "query"}`
-        );
-
         session = startSession({
           mode,
           transport: "phone",
+          callId: claimed?.callId,
+          carrier: claimed
+            ? {
+                carrierId: claimed.carrierId,
+                carrierName: claimed.carrierName,
+                kind: "human",
+                roundId: claimed.roundId,
+              }
+            : undefined,
           // Volta's audio -> Twilio -> the person's handset.
           sendAudio: (payload) =>
             toTwilio({ event: "media", streamSid, media: { payload } }),

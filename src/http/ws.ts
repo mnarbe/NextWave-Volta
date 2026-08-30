@@ -17,6 +17,7 @@ import type { WebSocket } from "ws";
 
 import { subscribe } from "../bus.js";
 import { startSession } from "../session.js";
+import { claimPendingHumanCarrier } from "../negotiation/round.js";
 import { handleTwilioMedia } from "../telephony/stream.js";
 import type { Mandate } from "../domain/types.js";
 
@@ -77,10 +78,22 @@ function handleDashboardSocket(browserWs: WebSocket) {
         // Going from intake to negotiation opens a new call: close the previous
         // one so we do not leave a bridge to OpenAI hanging around listening.
         session?.bridge.close();
+        // If a round is waiting for its human carrier, this session fills that
+        // seat (reuses the pre-created callId, inherits the carrier/round tags).
+        const claimed = mode === "negotiate" ? claimPendingHumanCarrier() : null;
         session = startSession({
           mode,
           transport: "browser",
           mandate: (msg.mandate as Mandate) || null,
+          callId: claimed?.callId,
+          carrier: claimed
+            ? {
+                carrierId: claimed.carrierId,
+                carrierName: claimed.carrierName,
+                kind: "human",
+                roundId: claimed.roundId,
+              }
+            : undefined,
           sendAudio: (audio) => toBrowser({ type: "audio", audio }),
           clearAudio: () => toBrowser({ type: "clear" }),
           // No Twilio marks here: give the last audio time to play out.

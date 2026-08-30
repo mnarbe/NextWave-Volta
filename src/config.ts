@@ -27,7 +27,18 @@ const url = publicUrl();
 export const config = {
   openaiApiKey: required("OPENAI_API_KEY"),
   openaiRealtimeModel: process.env.OPENAI_REALTIME_MODEL || "gpt-realtime",
+  // Text model for the parallel round: the scripted carrier personas and the
+  // text-driven Volta that negotiates against them.
+  openaiTextModel: process.env.OPENAI_TEXT_MODEL || "gpt-4o-mini",
   port: Number(process.env.PORT || 3000),
+
+  // In a round, where the ONE human carrier (one of us) comes in from.
+  //   "browser" = the dashboard's microphone mode.
+  //   "phone"   = Volta dials a number via POST /call.
+  humanCarrierTransport:
+    (process.env.HUMAN_CARRIER_TRANSPORT || "browser").toLowerCase() === "phone"
+      ? ("phone" as const)
+      : ("browser" as const),
 
   // --- Twilio (optional) -----------------------------------------------------
   publicUrl: url,

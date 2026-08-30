@@ -12,8 +12,8 @@
 export type BusEvent = {
   kind: string;
   callId: string;
-  // "browser" (browser mic) | "phone" (Twilio)
-  transport: "browser" | "phone";
+  // "browser" (browser mic) | "phone" (Twilio) | "sim" (scripted carrier / round)
+  transport: "browser" | "phone" | "sim";
   data: unknown;
 };
 

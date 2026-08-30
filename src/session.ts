@@ -7,7 +7,7 @@
 // -----------------------------------------------------------------------------
 import { createCall } from "./store/calls.js";
 import { getMandate } from "./store/mandates.js";
-import { beginNegotiation } from "./store/negotiations.js";
+import { beginNegotiation, type CarrierMeta } from "./store/negotiations.js";
 import { toMandate } from "./domain/mandate.js";
 import { DEFAULT_MANDATE } from "./domain/defaults.js";
 import { RealtimeBridge, type Phase, type Transport } from "./agent/realtime.js";
@@ -27,6 +27,10 @@ export type SessionOptions = {
   mode: Phase;
   transport: Transport;
   mandate?: Mandate | null;
+  // When this session is the human carrier of a round: its pre-created callId
+  // and the carrier/round tags to stamp on the negotiation record.
+  callId?: string;
+  carrier?: CarrierMeta;
   // Volta's audio out to the transport (speakers or Twilio).
   sendAudio: (base64: string) => void;
   clearAudio: () => void;
@@ -46,11 +50,12 @@ export type Session = {
 
 export function startSession(opts: SessionOptions): Session {
   const mandate = resolveMandate(opts.mode, opts.mandate);
-  const callId = createCall(mandate);
+  const callId = createCall(mandate, opts.callId);
 
   // Open the negotiation record for this carrier (Volta fills the name in via
-  // log_carrier_offer once it knows it).
-  if (opts.mode === "negotiate") beginNegotiation(callId, mandate);
+  // log_carrier_offer once it knows it). `opts.carrier` is set when this session
+  // is a round's human carrier.
+  if (opts.mode === "negotiate") beginNegotiation(callId, mandate, opts.carrier);
 
   const bridge = new RealtimeBridge(
     callId,
@@ -70,7 +75,7 @@ export function startSession(opts: SessionOptions): Session {
     kind: "call_started",
     callId,
     transport: opts.transport,
-    data: { mode: opts.mode, mandate },
+    data: { mode: opts.mode, mandate, carrier: opts.carrier },
   });
 
   return { callId, bridge, mandate };

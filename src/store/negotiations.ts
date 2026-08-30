@@ -13,14 +13,30 @@
 // job starts) so the dashboard only shows the current job.
 // -----------------------------------------------------------------------------
 import type {
+  CarrierKind,
   CarrierNegotiation,
   CarrierOffer,
   Mandate,
+  RoundDecision,
 } from "../domain/types.js";
+import { compareCarriers } from "../domain/compare.js";
 import { NEGOTIATIONS_FILE, readJson, writeJson } from "./paths.js";
-import { exportNegotiation } from "./firebase.js";
+import { exportNegotiation, exportRound } from "./firebase.js";
 
-type Db = { updatedAt: string; carriers: CarrierNegotiation[] };
+// Round metadata attached to a carrier's negotiation record.
+export type CarrierMeta = {
+  carrierId?: string;
+  carrierName?: string;
+  kind?: CarrierKind;
+  roundId?: string;
+};
+
+type Db = {
+  updatedAt: string;
+  carriers: CarrierNegotiation[];
+  roundId?: string;
+  decision?: RoundDecision;
+};
 
 let db: Db = load();
 
@@ -47,28 +63,39 @@ function addCondition(list: string[], cond: string): void {
   if (c && !list.some((x) => x.toLowerCase() === c.toLowerCase())) list.push(c);
 }
 
-// Start (or recover) the negotiation record for a carrier.
+// Start (or recover) the negotiation record for a carrier. `meta` tags the
+// record with its place in a round (carrier id / kind / roundId); it is optional
+// so the plain single-carrier flow is unchanged.
 export function beginNegotiation(
   callId: string,
-  mandate?: Mandate | null
+  mandate?: Mandate | null,
+  meta?: CarrierMeta
 ): CarrierNegotiation {
   let c = find(callId);
   if (!c) {
     c = {
       callId,
-      carrierName: "",
+      carrierName: meta?.carrierName ?? "",
       startedAt: new Date().toISOString(),
       offers: [],
       latest: { conditions: [] },
       refusals: 0,
       status: "in_progress",
       mandateSnapshot: mandate ?? null,
+      carrierId: meta?.carrierId,
+      kind: meta?.kind,
+      roundId: meta?.roundId,
     };
     db.carriers.push(c);
     persist();
-  } else if (mandate && !c.mandateSnapshot) {
-    c.mandateSnapshot = mandate;
-    persist();
+  } else {
+    let touched = false;
+    if (mandate && !c.mandateSnapshot) ((c.mandateSnapshot = mandate), (touched = true));
+    if (meta?.carrierName && !c.carrierName) ((c.carrierName = meta.carrierName), (touched = true));
+    if (meta?.carrierId && !c.carrierId) ((c.carrierId = meta.carrierId), (touched = true));
+    if (meta?.kind && !c.kind) ((c.kind = meta.kind), (touched = true));
+    if (meta?.roundId && !c.roundId) ((c.roundId = meta.roundId), (touched = true));
+    if (touched) persist();
   }
   return c;
 }
@@ -80,7 +107,9 @@ export function recordOffer(
   offer: CarrierOffer
 ): CarrierNegotiation {
   const c = find(callId) ?? beginNegotiation(callId);
-  if (carrierName && carrierName.trim()) c.carrierName = carrierName.trim();
+  // In a round the name comes from the roster (c.carrierId is set) — don't let
+  // the model's guess overwrite it. Outside a round, take what Volta learned.
+  if (carrierName && carrierName.trim() && !c.carrierId) c.carrierName = carrierName.trim();
 
   c.offers.push(offer);
 
@@ -155,8 +184,40 @@ export function getAllNegotiations(): CarrierNegotiation[] {
   return db.carriers;
 }
 
-// New job (new mandate) -> clear the old negotiations.
+// New job (new mandate) -> clear the old negotiations and any round decision.
 export function resetNegotiations(): void {
   db = { updatedAt: new Date().toISOString(), carriers: [] };
   persist();
+}
+
+// -----------------------------------------------------------------------------
+// ROUND
+// -----------------------------------------------------------------------------
+
+// Tag the current set of negotiations as belonging to a round.
+export function setRound(roundId: string): void {
+  db.roundId = roundId;
+  db.decision = undefined;
+  persist();
+}
+
+export function getRoundId(): string | undefined {
+  return db.roundId;
+}
+
+// Close the round: run the comparator over every carrier and store the winner.
+export function finalizeRound(mandate: Mandate | null): RoundDecision {
+  const decision: RoundDecision = {
+    ...compareCarriers(db.carriers, mandate),
+    roundId: db.roundId ?? "",
+    decidedAt: new Date().toISOString(),
+  };
+  db.decision = decision;
+  persist();
+  exportRound(decision);
+  return decision;
+}
+
+export function getDecision(): RoundDecision | undefined {
+  return db.decision;
 }

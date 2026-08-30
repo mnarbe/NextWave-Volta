@@ -13,11 +13,16 @@ import fs from "node:fs";
 import { cert, getApps, initializeApp, type App } from "firebase-admin/app";
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
 
-import type { CarrierNegotiation, NegotiationMandate } from "../domain/types.js";
+import type {
+  CarrierNegotiation,
+  NegotiationMandate,
+  RoundDecision,
+} from "../domain/types.js";
 
 // Collections in Firestore.
 const NEGOTIATIONS = "negotiations";
 const MANDATES = "mandates";
+const ROUNDS = "rounds";
 
 // null once we know Firebase isn't configured (so we only warn once).
 let cached: Firestore | null | undefined;
@@ -113,5 +118,15 @@ export function exportMandate(mandate: NegotiationMandate): void {
     store
       .collection(MANDATES)
       .add({ ...mandate, exportedAt: new Date().toISOString() })
+  );
+}
+
+// End of a round: the comparison result and the chosen carrier, keyed by roundId.
+export function exportRound(decision: RoundDecision): void {
+  send(`round ${decision.roundId.slice(0, 8)}`, (store) =>
+    store
+      .collection(ROUNDS)
+      .doc(decision.roundId || new Date().toISOString())
+      .set({ ...decision, exportedAt: new Date().toISOString() }, { merge: true })
   );
 }
