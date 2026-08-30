@@ -155,6 +155,38 @@ confirmation link is on its way and that nothing is final until each clicks it.
 Nothing actually leaves the building — there is no mail sending code, on
 purpose.
 
+
+## When Volta steps out
+
+Volta has narrow authority: take a brief, shop a load, ask the client about a
+change. Anything else is a person's job. `request_human_handoff` fires when
+someone asks for a human — taken at face value the first time — or on a
+complaint, a dispute, anything legal or financial beyond the booking, an upset
+caller, or a conversation Volta has lost the thread of. Handing over
+unnecessarily costs a minute; not handing over means improvising with no
+authority.
+
+Volta says a colleague is taking over and that they will already have the
+context. `src/agent/handover.ts` then makes that true: the brief, the deal on
+the table, every carrier quote and the full transcript are written to
+`data/handovers.json` and shown on the dashboard. The automatic follow-up calls
+are suppressed for that call, so Volta does not ring across whatever the person
+is doing.
+
+**What is missing is the last hop.** The call itself cannot be transferred:
+Twilio can do a warm transfer, but not while our media stream owns the call —
+it would need the call re-pointed at new TwiML, and that is not built. So the
+summary is real and the transfer is not. The module says so in its header.
+
+## One call at a time
+
+Every automatic follow-up fires off something that happens DURING a call — the
+round picks its winner while Volta is still saying goodbye to the last carrier.
+Waiting a few seconds from that moment is not the same as waiting for the line
+to be free, and Volta was ringing people who were still on the phone with it.
+`src/telephony/line.ts` tracks whether a call is up; every follow-up now waits
+for the line to clear and then pauses three seconds before dialling.
+
 ---
 
 ## Setup

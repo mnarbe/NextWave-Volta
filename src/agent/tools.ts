@@ -16,6 +16,7 @@ import {
 } from "../store/negotiations.js";
 import { evaluateChange, resolveChange } from "../negotiation/escalation.js";
 import { checkPin, isVerified } from "../security/pin.js";
+import { requestHandover } from "./handover.js";
 import type { NegotiationMandate, Proposal } from "../domain/types.js";
 
 function num(v: unknown): number | undefined {
@@ -48,10 +49,39 @@ function strArray(v: unknown): string[] {
   return Array.isArray(v) ? v.map((x) => String(x)).filter(Boolean) : [];
 }
 
+// Available in EVERY phase: any call can go somewhere Volta should not be.
+const handoverTool = {
+  type: "function",
+  name: "request_human_handoff",
+  description:
+    "Hand this call to a human colleague. Call this the moment the caller asks " +
+    "to speak to a person, or the conversation goes outside what you are here " +
+    "for: a complaint or a dispute, anything legal, contractual or financial " +
+    "beyond this booking, a caller who is upset or who you cannot help, or a " +
+    "conversation you have lost the thread of. Erring towards calling it costs " +
+    "a minute; not calling it means improvising with no authority.",
+  parameters: {
+    type: "object",
+    properties: {
+      reason: {
+        type: "string",
+        description:
+          "Why a person is needed, in one line, for the colleague picking it up.",
+      },
+      askedFor: {
+        type: "string",
+        description: "What the caller asked for, in their words, if they said it.",
+      },
+    },
+    required: ["reason"],
+  },
+} as const;
+
 // ---------------------------------------------------------------------------
 // PHASE 0 — INTAKE tools (talking to the client).
 // ---------------------------------------------------------------------------
 export const intakeToolDefinitions = [
+  handoverTool,
   {
     type: "function",
     name: "verify_caller",
@@ -140,6 +170,7 @@ export const intakeToolDefinitions = [
 // the provider's yes or no.
 // ---------------------------------------------------------------------------
 export const escalationToolDefinitions = [
+  handoverTool,
   {
     type: "function",
     name: "record_provider_decision",
@@ -184,6 +215,7 @@ export const escalationToolDefinitions = [
 
 // PHASE 1 — carrier negotiation tools. Schema for the Realtime API.
 export const toolDefinitions = [
+  handoverTool,
   {
     type: "function",
     name: "check_mandate",
@@ -391,6 +423,38 @@ export async function runTool(
 
   switch (name) {
     // --- PHASE 0: intake with the client ----------------------------------
+    // The failsafe. Volta steps out and a person takes over. The summary is
+    // written for real (agent/handover.ts) — what does not happen yet is the
+    // last hop, actually putting a colleague on the line.
+    case "request_human_handoff": {
+      const handover = requestHandover({
+        callId,
+        phase: call.mandate ? "negotiation/escalation" : "intake",
+        reason: String(args.reason ?? "not stated"),
+        askedFor: args.askedFor || undefined,
+      });
+      result = {
+        ok: true,
+        ending: true,
+        handoverId: handover.id,
+        summaryIncludes: [
+          "the brief as it stands",
+          "the deal on the table, if there is one",
+          "every carrier quote so far",
+          "the full transcript of this call",
+        ],
+        instruction:
+          "Tell them plainly that you are putting them in touch with a human " +
+          "colleague, and that the colleague will have the full context — a " +
+          "summary of this conversation and of the decisions taken so far — so " +
+          "they will not have to explain it again. Do not promise a time you do " +
+          "not know. Do not try to solve the thing you just handed over. Thank " +
+          "them, say goodbye properly, and only then call the end tool for this " +
+          "call.",
+      };
+      break;
+    }
+
     case "verify_caller": {
       const check = checkPin({
         callId,

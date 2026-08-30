@@ -438,6 +438,13 @@ export class RealtimeBridge {
       this.cb.onEvent(kind, result);
     }
 
+    // A person is taking over. The dashboard needs to show it, and the
+    // transport must not chain another automatic call after this one.
+    if (evt.name === "request_human_handoff") {
+      log(this.callId, "handed_to_human", result);
+      this.cb.onEvent("handed_to_human", result);
+    }
+
     // The client answered: the transport rings the carrier back with the verdict.
     if (evt.name === "record_provider_decision" && (result as any).ok) {
       log(this.callId, "provider_decided", result);

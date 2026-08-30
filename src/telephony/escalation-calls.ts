@@ -14,11 +14,12 @@ import { config, twilioReady } from "../config.js";
 import { publish } from "../bus.js";
 import { placeCall } from "./twilio.js";
 import { expectCarrier } from "./routing.js";
+import { dialWhenFree, SETTLE_MS } from "./line.js";
 import { loadRoster } from "../negotiation/roster.js";
 import { pendingChange, lastResolvedChange } from "../negotiation/escalation.js";
 
 // Long enough for Twilio to tear the previous call down.
-const NEXT_CALL_DELAY_MS = 3000;
+const NEXT_CALL_DELAY_MS = SETTLE_MS;
 
 function dialable(n: string | undefined): n is string {
   return Boolean(n && /^\+[1-9]\d{6,15}$/.test(n));
@@ -52,7 +53,8 @@ function ring(opts: {
     data: { ...opts.data, to: opts.to, delayMs: NEXT_CALL_DELAY_MS },
   });
 
-  setTimeout(async () => {
+  // Hold until the call that triggered this has actually hung up.
+  dialWhenFree(async () => {
     try {
       const call = await placeCall({ to: opts.to, mode: opts.mode, carrier: opts.carrier });
       console.log(`[escalation] ${opts.mode} call to ${opts.to}, sid=${call.sid}`);

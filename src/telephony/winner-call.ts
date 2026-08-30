@@ -16,12 +16,13 @@ import { publish, subscribe } from "../bus.js";
 import { getNegotiation } from "../store/negotiations.js";
 import { placeCall } from "./twilio.js";
 import { expectCarrier } from "./routing.js";
+import { dialWhenFree, SETTLE_MS } from "./line.js";
 import { loadRoster } from "../negotiation/roster.js";
 import type { RoundDecision } from "../domain/types.js";
 
 // Breather between the round closing and the confirmation call, so the human
 // is not rung the instant they hang up.
-const CONFIRM_DELAY_MS = 3000;
+const CONFIRM_DELAY_MS = SETTLE_MS;
 
 // The number to ring for a given carrier: the one on its roster entry, falling
 // back to the demo phone.
@@ -75,7 +76,10 @@ export function callWinner(decision: RoundDecision): void {
   // If they call in instead of picking up, they are still the carrier.
   expectCarrier(to);
 
-  setTimeout(async () => {
+  // The round decides its winner while Volta may still be on the phone saying
+  // goodbye to the last carrier. Wait for that call to actually hang up, then
+  // pause, then dial — otherwise we ring someone who is still talking to us.
+  dialWhenFree(async () => {
     try {
       const call = await placeCall({
         to,

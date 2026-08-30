@@ -8,11 +8,14 @@ import http from "node:http";
 import { config, twilioReady, twilioMissing } from "./config.js";
 import { createApp } from "./http/routes.js";
 import { attachWebSocket } from "./http/ws.js";
+import { watchLine } from "./telephony/line.js";
 import { watchRounds } from "./telephony/winner-call.js";
 
 const server = http.createServer(createApp());
 attachWebSocket(server);
 // When a round closes, call the winning carrier back to confirm.
+// Track whether a phone call is up, so follow-up calls wait for a free line.
+watchLine();
 watchRounds();
 
 server.listen(config.port, () => {

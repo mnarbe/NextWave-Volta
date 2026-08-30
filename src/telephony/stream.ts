@@ -23,6 +23,7 @@ import { startSession } from "../session.js";
 import { forgetCarrier } from "./routing.js";
 import { scheduleCarrierCallback } from "./handoff.js";
 import { escalateToProvider, reportBackToCarrier } from "./escalation-calls.js";
+import { wasHandedOver } from "../agent/handover.js";
 import { claimPendingHumanCarrier } from "../negotiation/round.js";
 import { findCarrierByPhone } from "../negotiation/roster.js";
 import type { Phase } from "../agent/realtime.js";
@@ -95,19 +96,25 @@ export function handleTwilioMedia(ws: WebSocket, req: IncomingMessage) {
         `[stream] call ended | mode=${mode} peer=${peer || "(none)"} ` +
           `brief=${briefCaptured ? "captured" : "not captured"}`
       );
-      if (mode === "intake" && briefCaptured) {
-        scheduleCarrierCallback({ to: peer, fromCallId: session.callId });
-      }
+      // A person took this call over: none of the automatic follow-up calls
+      // should fire, or Volta would ring across whatever they are doing.
+      if (wasHandedOver(session.callId)) {
+        console.log(`[stream] handed to a human — no follow-up call`);
+      } else {
+        if (mode === "intake" && briefCaptured) {
+          scheduleCarrierCallback({ to: peer, fromCallId: session.callId });
+        }
 
-      // A booked carrier left a change we are not allowed to accept on our own:
-      // the next call is to the client, to ask them.
-      if (mode === "negotiate" && escalationPending) {
-        escalateToProvider(session.callId);
-      }
+        // A booked carrier left a change we are not allowed to accept on our
+        // own: the next call is to the client, to ask them.
+        if (mode === "negotiate" && escalationPending) {
+          escalateToProvider(session.callId);
+        }
 
-      // The client just gave their answer: ring the carrier back with it.
-      if (mode === "escalate" && providerDecided) {
-        reportBackToCarrier(session.callId);
+        // The client just gave their answer: ring the carrier back with it.
+        if (mode === "escalate" && providerDecided) {
+          reportBackToCarrier(session.callId);
+        }
       }
     }
   };

@@ -13,6 +13,7 @@ import { config, twilioReady } from "../config.js";
 import { publish } from "../bus.js";
 import { placeCall } from "./twilio.js";
 import { expectCarrier } from "./routing.js";
+import { dialWhenFree } from "./line.js";
 import { startRound } from "../negotiation/round.js";
 import { loadRoster } from "../negotiation/roster.js";
 
@@ -104,7 +105,8 @@ export function scheduleCarrierCallback(opts: HandoffOptions): boolean {
     data: { to, delayMs: HANDOFF_DELAY_MS, roundId },
   });
 
-  setTimeout(async () => {
+  // The intake call may still be hanging up as this fires.
+  dialWhenFree(async () => {
     try {
       const call = await placeCall({ to, mode: "negotiate" });
       console.log(`[handoff] calling ${to} as carrier, sid=${call.sid}`);

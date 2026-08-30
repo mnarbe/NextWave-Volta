@@ -147,6 +147,13 @@ function onServerMessage(ev) {
       view.setPhoneState("no call");
       break;
 
+    // --- failsafe: a person takes the call over -----------------------------
+    case "handed_to_human":
+      view.setPhoneState("handed to a human colleague", "err");
+      view.addMessage("agent", "— handing this call to a person; they get the full summary —", live);
+      view.addTool("tool_result", { name: "request_human_handoff", result: msg.data });
+      break;
+
     // --- handoff: after the intake, Volta calls the same number back ----------
     case "handoff_scheduled": {
       const secs = Math.round((msg.data.delayMs || 0) / 1000);
