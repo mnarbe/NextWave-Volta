@@ -7,9 +7,13 @@ import type { CallState, Mandate, LogEntry } from "../domain/types.js";
 
 const calls = new Map<string, CallState>();
 
-export function createCall(mandate: Mandate | null = null): string {
-  const callId = randomUUID();
-  calls.set(callId, { callId, mandate, commitments: [], log: [], refusals: 0 });
+// `id` lets a caller (a round) pre-create a call under a known id; the call is
+// created only once, so a later startSession using the same id is a no-op.
+export function createCall(mandate: Mandate | null = null, id?: string): string {
+  const callId = id ?? randomUUID();
+  if (!calls.has(callId)) {
+    calls.set(callId, { callId, mandate, commitments: [], log: [], refusals: 0 });
+  }
   return callId;
 }
 

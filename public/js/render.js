@@ -16,6 +16,7 @@
 // inputs; everything else it draws goes through the functions in this file.
 export const ui = {
   dot: document.getElementById("dot"),
+  roundBtn: document.getElementById("roundBtn"),
   startBtn: document.getElementById("startBtn"),
   stopBtn: document.getElementById("stopBtn"),
   forceCutBtn: document.getElementById("forceCutBtn"),
@@ -221,7 +222,39 @@ function renderCarriers() {
   carriersEl.innerHTML = list.map(carrierCard).join("");
 }
 
+// When a round has closed, its result takes over the "Final decision" panel.
+let roundResult = null;
+
+function renderRoundBanner(d) {
+  const rows = (d.ranking || [])
+    .map((r, i) => {
+      const mark = r.callId === d.winnerCallId ? "🏆 " : r.eligible ? "• " : "✗ ";
+      const price = r.priceMxn != null ? "$" + Number(r.priceMxn).toLocaleString("en-US") : "—";
+      const why = r.disqualifiers && r.disqualifiers.length
+        ? ` <span class="anon">(${escapeHtml(r.disqualifiers.join("; "))})</span>`
+        : "";
+      const delay = r.pickupDelayDays > 0 ? ` +${r.pickupDelayDays}d` : "";
+      return `<li>${mark}<strong>${escapeHtml(r.carrierName)}</strong> — ${price}${escapeHtml(delay)}${why}</li>`;
+    })
+    .join("");
+  const review = (d.needsHumanReview || [])
+    .map((x) => `<li>${escapeHtml(x.carrierName)} — ${escapeHtml(x.why)}</li>`)
+    .join("");
+  decisionEl.className = "decision " + (d.outcome === "deal" ? "deal" : "no_deal");
+  decisionEl.innerHTML = `
+    <div class="outcome">${d.outcome === "deal" ? "✓ ROUND WON" : "✗ ROUND — NO CLEAN WINNER"}</div>
+    <div class="summary">${escapeHtml(d.reason || "")}</div>
+    <ol class="kv" style="list-style:none;padding:0">${rows}</ol>
+    ${review ? `<div class="relay"><div class="relay-title">Needs human review</div><ul>${review}</ul></div>` : ""}`;
+}
+
+export function renderRoundResult(decision) {
+  roundResult = decision || null;
+  renderDecision();
+}
+
 function renderDecision() {
+  if (roundResult) return renderRoundBanner(roundResult);
   const done = [...negs.values()].filter((c) => c.final);
   if (!done.length) {
     decisionEl.className = "hint";
@@ -300,6 +333,7 @@ export function refreshNegotiations() {
 
 export function clearNegotiations() {
   negs.clear();
+  roundResult = null;
   renderCarriers();
   renderDecision();
 }

@@ -12,6 +12,7 @@ import { getCall } from "../store/calls.js";
 import { getMandate } from "../store/mandates.js";
 import { getAllNegotiations } from "../store/negotiations.js";
 import { telephonyRoutes } from "./telephony.js";
+import { roundRoutes } from "./round.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // src/http/ -> project root -> public/
@@ -48,6 +49,9 @@ export function createApp() {
 
   // Phone: Twilio webhooks + control API (/call, /twilio/health, ...).
   app.use(telephonyRoutes);
+
+  // Parallel carrier round: /round/start, /round.
+  app.use(roundRoutes);
 
   return app;
 }

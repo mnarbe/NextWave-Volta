@@ -20,6 +20,7 @@ import type { WebSocket } from "ws";
 import { log } from "../store/calls.js";
 import { publish } from "../bus.js";
 import { startSession } from "../session.js";
+import { claimPendingHumanCarrier } from "../negotiation/round.js";
 import type { Phase } from "../agent/realtime.js";
 
 // Marker name we use to hang up only once Volta's closing line has played.
@@ -83,9 +84,21 @@ export function handleTwilioMedia(ws: WebSocket, req: IncomingMessage) {
         streamSid = msg.start?.streamSid || msg.streamSid || "";
         callSid = msg.start?.callSid || "";
 
+        // Fill a round's human carrier seat if one is waiting.
+        const claimed = mode === "negotiate" ? claimPendingHumanCarrier() : null;
+
         session = startSession({
           mode,
           transport: "phone",
+          callId: claimed?.callId,
+          carrier: claimed
+            ? {
+                carrierId: claimed.carrierId,
+                carrierName: claimed.carrierName,
+                kind: "human",
+                roundId: claimed.roundId,
+              }
+            : undefined,
           // Volta's audio -> Twilio -> the person's handset.
           sendAudio: (payload) =>
             toTwilio({ event: "media", streamSid, media: { payload } }),
