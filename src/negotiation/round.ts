@@ -27,6 +27,7 @@ import {
 import { toMandate } from "../domain/mandate.js";
 import type { CarrierSpec } from "../domain/types.js";
 import { loadRoster } from "./roster.js";
+import { clearChanges } from "./escalation.js";
 import { runTextNegotiation } from "./text-run.js";
 
 // The human might take a few minutes; the sims finish in well under one. If a
@@ -74,6 +75,9 @@ export function startRound(opts: { roster?: unknown } = {}): StartRoundResult {
 
   const roundId = randomUUID();
   resetNegotiations();
+  // A round is a fresh comparison: any half-finished change from the last one
+  // refers to a booking this round is about to replace.
+  clearChanges();
   setRound(roundId);
 
   const pending = new Set(roster.map((c) => c.id));

@@ -16,6 +16,7 @@ import {
   guessIso,
 } from "../telephony/twilio.js";
 import { resolveInboundParty, phaseFor } from "../telephony/routing.js";
+import { localOnly } from "./local-only.js";
 
 export const telephonyRoutes = Router();
 
@@ -102,7 +103,7 @@ telephonyRoutes.get("/twilio/health", async (_req, res) => {
 });
 
 // Points the number at this machine (same as editing it in the console).
-telephonyRoutes.post("/twilio/setup", async (_req, res) => {
+telephonyRoutes.post("/twilio/setup", localOnly, async (_req, res) => {
   try {
     res.json(await configureAllNumbers());
   } catch (err: any) {
@@ -113,7 +114,7 @@ telephonyRoutes.post("/twilio/setup", async (_req, res) => {
 // Volta CALLS someone. Defaults to negotiation mode (the carrier case).
 //   curl -X POST localhost:3000/call -H 'content-type: application/json' \
 //        -d '{"to":"+5215512345678","carrier":"Transportes del Pacifico"}'
-telephonyRoutes.post("/call", async (req, res) => {
+telephonyRoutes.post("/call", localOnly, async (req, res) => {
   const to = String(req.body?.to || "").trim();
   if (!/^\+[1-9]\d{6,15}$/.test(to)) {
     return res.status(400).json({ error: "to must be E.164, e.g. +5215512345678" });
@@ -152,7 +153,7 @@ telephonyRoutes.post("/call", async (req, res) => {
   }
 });
 
-telephonyRoutes.post("/call/:sid/hangup", async (req, res) => {
+telephonyRoutes.post("/call/:sid/hangup", localOnly, async (req, res) => {
   try {
     await hangup(req.params.sid);
     res.json({ ok: true });

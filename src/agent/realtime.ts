@@ -66,6 +66,10 @@ type Callbacks = {
   // The transport decides how to hang up: the browser waits a moment, Twilio
   // sends a "mark" and hangs up once the last audio has actually played.
   onFinal: () => void;
+  // The bridge died mid-call — OpenAI dropped the socket, or errored out. There
+  // is no agent on the line any more, so the transport must hang up instead of
+  // leaving the caller listening to silence.
+  onFailure?: (reason: string) => void;
 };
 
 export type BridgeOptions = {
@@ -95,6 +99,8 @@ export class RealtimeBridge {
   private spokeThisResponse = false;
   private closingLineRequested = false;
   private finalFired = false;
+  // Did WE close the socket? Then its "close" event is expected, not a failure.
+  private closedByUs = false;
 
   constructor(callId: string, cb: Callbacks, opts: BridgeOptions = {}) {
     this.callId = callId;
@@ -114,10 +120,14 @@ export class RealtimeBridge {
 
     this.ws.on("open", () => this.onOpen());
     this.ws.on("message", (raw) => this.onMessage(raw));
-    this.ws.on("error", (err) =>
-      log(this.callId, "error", { where: "openai_ws", err: String(err) })
-    );
-    this.ws.on("close", () => log(this.callId, "call_ended", { side: "openai" }));
+    this.ws.on("error", (err) => {
+      log(this.callId, "error", { where: "openai_ws", err: String(err) });
+      this.fail("openai_error");
+    });
+    this.ws.on("close", () => {
+      log(this.callId, "call_ended", { side: "openai" });
+      this.fail("openai_disconnected");
+    });
   }
 
   // The audio format we negotiate with OpenAI, per transport.
@@ -427,6 +437,17 @@ export class RealtimeBridge {
     }
   }
 
+  // The agent is gone. Tell the transport so the call ends rather than sitting
+  // there in silence. Harmless when the socket closed because WE closed it: by
+  // then the call is already finishing.
+  private fail(reason: string) {
+    if (this.finalFired || this.closedByUs) return;
+    this.finalFired = true;
+    log(this.callId, "error", { where: "bridge", msg: `agent lost: ${reason}` });
+    this.cb.onEvent("agent_lost", { reason });
+    this.cb.onFailure?.(reason);
+  }
+
   private fireFinal() {
     if (this.finalFired) return;
     this.finalFired = true;
@@ -554,6 +575,7 @@ export class RealtimeBridge {
   }
 
   public close() {
+    this.closedByUs = true;
     // A verified call is verified only while it lasts.
     forgetCall(this.callId);
     try {

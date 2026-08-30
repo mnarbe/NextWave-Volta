@@ -199,6 +199,12 @@ export function handleTwilioMedia(ws: WebSocket, req: IncomingMessage) {
             toTwilio({ event: "mark", streamSid, mark: { name: FINAL_MARK } });
             finalTimer = setTimeout(shutdown, FINAL_TIMEOUT_MS);
           },
+          // The agent died mid-call. There is nobody to talk to any more, so
+          // hang up rather than leave them holding a silent line.
+          onFailure: (reason) => {
+            console.error(`[stream] agent lost (${reason}) — hanging up`);
+            shutdown();
+          },
           // The brief landing is what earns the callback (see shutdown).
           onEvent: (kind) => {
             if (mode === "intake" && (kind === "mandate_captured" || kind === "intake_done")) {

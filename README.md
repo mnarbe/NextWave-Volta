@@ -149,6 +149,20 @@ the only other signal. It stops a wrong number and a casual impostor. It does
 not stop someone who knows the code, and caller ID can be spoofed. A real
 deployment wants a code per client, rotated, and a callback to a number on file.
 
+
+**The control endpoints are not on the internet.** The webhooks have to be
+public and are signature-checked, but `POST /call`, `/round/start` and
+`/twilio/setup` are reachable only from the machine running Volta — the first
+of those dials any number in the world on your Twilio account. Note that ngrok
+forwards to localhost, so every tunnelled request arrives from 127.0.0.1:
+checking the source IP would have let the whole internet through. The check is
+the tunnel fingerprint (forwarding headers and the Host) instead. Set
+`ALLOW_REMOTE_CONTROL=1` to open them.
+
+**If the agent dies mid-call, the call ends.** If the OpenAI socket drops, the
+bridge tells the transport to hang up rather than leaving the caller on a silent
+line wondering what happened.
+
 **Confirmation emails are scripted, not sent.** Providers and carriers have an
 email on file (`src/negotiation/roster.ts`), and Volta tells both sides that a
 confirmation link is on its way and that nothing is final until each clicks it.

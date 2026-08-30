@@ -14,7 +14,7 @@ import {
   getNegotiation,
   resetNegotiations,
 } from "../store/negotiations.js";
-import { evaluateChange, resolveChange } from "../negotiation/escalation.js";
+import { evaluateChange, resolveChange, clearChanges } from "../negotiation/escalation.js";
 import { checkPin, isVerified } from "../security/pin.js";
 import { requestHandover } from "./handover.js";
 import type { NegotiationMandate, Proposal } from "../domain/types.js";
@@ -518,8 +518,15 @@ export async function runTool(
         capturedAt: new Date().toISOString(),
       };
       saveMandate(mandate);
-      // New job: clear the carrier negotiations from the previous run.
+      // New job: clear the carrier negotiations from the previous run...
       resetNegotiations();
+      // ...and the change workflow with them. A change left pending from the
+      // last run belongs to a booking that no longer exists: leaving it there
+      // means Volta can ring the client about a carrier from the previous demo,
+      // and lastResolvedChange() can feed stale figures into a confirmation
+      // call. Handovers are deliberately NOT cleared — those are a record of
+      // work waiting for a person, not workflow state.
+      clearChanges();
       // Tell Volta what the brief is still missing, so it knows what to ask
       // next instead of closing the call half-informed. containerNumber is not
       // in here: we ask for it once, but the client may simply not have it.
