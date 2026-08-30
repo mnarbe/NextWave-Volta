@@ -178,6 +178,28 @@ Twilio can do a warm transfer, but not while our media stream owns the call —
 it would need the call re-pointed at new TwiML, and that is not built. So the
 summary is real and the transfer is not. The module says so in its header.
 
+## Why each call is happening
+
+Every carrier call carries an INTENT, and the intent picks the script:
+
+| Intent | The call | How Volta opens |
+| --- | --- | --- |
+| `quote` | shopping the load in a round | states the job, asks their price |
+| `confirm` | they won: book it | reads the terms back, commits |
+| `change_approved` | the client said yes to their change | good news, then the final terms |
+| `change_rejected` | the client said no | says so plainly, cancels |
+| `inbound` | THEY rang us | reads the booking back, asks what they need |
+
+This used to be inferred from "do we have a booking with them?", which meant that
+from the moment a load was booked every later contact — including the call that
+books it — opened as if something had gone wrong. A carrier ringing to check an
+address got "what has changed?".
+
+The intent rides as a `<Parameter>` on the TwiML, next to the mode. Inbound calls
+default to `inbound`: they rang us, and we do not get to assume it is bad news.
+
+---
+
 ## One call at a time
 
 Every automatic follow-up fires off something that happens DURING a call — the

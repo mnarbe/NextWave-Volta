@@ -35,6 +35,21 @@ export type Phase = "intake" | "negotiate" | "escalate";
 // How the audio reaches the person.
 export type Transport = "browser" | "phone";
 
+// WHY this call is happening. The script follows from this, not from whether a
+// booking happens to exist: once one did, every later contact was running the
+// "something has gone wrong" script, including the call that books the load.
+//   quote           - shopping the load, no commitment yet
+//   confirm         - they won: read the terms back and book it
+//   change_approved - the client said yes to their change; confirm the new terms
+//   change_rejected - the client said no; cancel, politely
+//   inbound         - THEY rang US and we do not know why yet
+export type CallIntent =
+  | "quote"
+  | "confirm"
+  | "change_approved"
+  | "change_rejected"
+  | "inbound";
+
 type Callbacks = {
   // Volta's audio -> transport (browser speakers or Twilio).
   sendAudio: (base64: string) => void;
@@ -51,9 +66,8 @@ type Callbacks = {
 export type BridgeOptions = {
   phase?: Phase;
   transport?: Transport;
-  // This is the WINNER callback: terms are already agreed, Volta calls to
-  // confirm and book rather than to collect another quote.
-  confirming?: boolean;
+  // Why we are on this call. Drives which script Volta runs.
+  intent?: CallIntent;
 };
 
 export class RealtimeBridge {
@@ -62,7 +76,7 @@ export class RealtimeBridge {
   private cb: Callbacks;
   private phase: Phase;
   private transport: Transport;
-  private confirming: boolean;
+  private intent: CallIntent;
   private ready = false;
   // Is a model response in flight? Only then does response.cancel make sense
   // (the GA API errors out if there is no active response).
@@ -82,7 +96,7 @@ export class RealtimeBridge {
     this.cb = cb;
     this.phase = opts.phase ?? "intake";
     this.transport = opts.transport ?? "browser";
-    this.confirming = opts.confirming ?? false;
+    this.intent = opts.intent ?? "inbound";
 
     // GA API: no "OpenAI-Beta" header. The model goes in the query string and
     // also inside session.update (below).
@@ -196,8 +210,8 @@ export class RealtimeBridge {
       : buildInstructions(call.mandate ?? DEFAULT_MANDATE, {
           carrierName: neg?.carrierName || booking?.carrierName || undefined,
           carrierEmail: findCarrierById(neg?.carrierId)?.email,
-          collectingQuotes: Boolean(neg?.roundId) && !this.confirming,
-          confirming: this.confirming,
+          intent: this.intent,
+          collectingQuotes: Boolean(neg?.roundId) && this.intent === "quote",
           standingOffer: previous,
           booking: booking
             ? {

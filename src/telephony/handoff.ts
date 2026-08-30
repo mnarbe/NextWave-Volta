@@ -108,7 +108,7 @@ export function scheduleCarrierCallback(opts: HandoffOptions): boolean {
   // The intake call may still be hanging up as this fires.
   dialWhenFree(async () => {
     try {
-      const call = await placeCall({ to, mode: "negotiate" });
+      const call = await placeCall({ to, mode: "negotiate", intent: "quote" });
       console.log(`[handoff] calling ${to} as carrier, sid=${call.sid}`);
     } catch (err: any) {
       console.error(`[handoff] callback failed: ${err.message}`);

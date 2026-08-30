@@ -26,11 +26,18 @@ import { escalateToProvider, reportBackToCarrier } from "./escalation-calls.js";
 import { wasHandedOver } from "../agent/handover.js";
 import { claimPendingHumanCarrier } from "../negotiation/round.js";
 import { findCarrierByPhone } from "../negotiation/roster.js";
-import type { Phase } from "../agent/realtime.js";
+import type { Phase, CallIntent } from "../agent/realtime.js";
 
 // The script this call runs. Anything unrecognised means intake.
 function toPhase(v: string | null): Phase {
   return v === "negotiate" || v === "escalate" ? v : "intake";
+}
+
+// Anything we do not recognise means the other side rang us.
+function toIntent(v: string | null): CallIntent {
+  return v === "quote" || v === "confirm" || v === "change_approved" || v === "change_rejected"
+    ? v
+    : "inbound";
 }
 
 // Marker name we use to hang up only once Volta's closing line has played.
@@ -48,8 +55,9 @@ export function handleTwilioMedia(ws: WebSocket, req: IncomingMessage) {
   let carrierHint = query.get("carrier") || undefined;
   // The other party's number: who called us, or who we called.
   let peer = query.get("peer") || "";
-  // Winner callback: confirm and book rather than collect another quote.
-  let confirming = query.get("confirming") === "1";
+  // Why this call is happening. Inbound calls default to "inbound": THEY rang
+  // us, and we do not get to assume it is bad news.
+  let intent: CallIntent = toIntent(query.get("intent"));
 
   let streamSid = "";
   let callSid = "";
@@ -146,7 +154,7 @@ export function handleTwilioMedia(ws: WebSocket, req: IncomingMessage) {
         if (params.mode) mode = toPhase(String(params.mode));
         if (params.peer) peer = String(params.peer);
         if (params.carrier) carrierHint = String(params.carrier);
-        if (params.confirming) confirming = String(params.confirming) === "1";
+        if (params.intent) intent = toIntent(String(params.intent));
 
         // Who is on the line, in order of confidence:
         //   1. the round is holding a seat for its human carrier -> take it,
@@ -177,7 +185,7 @@ export function handleTwilioMedia(ws: WebSocket, req: IncomingMessage) {
         session = startSession({
           mode,
           transport: "phone",
-          confirming,
+          intent,
           callId: claimed?.callId,
           carrier: carrierMeta,
           // Volta's audio -> Twilio -> the person's handset.

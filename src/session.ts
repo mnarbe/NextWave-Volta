@@ -10,7 +10,7 @@ import { getMandate } from "./store/mandates.js";
 import { beginNegotiation, type CarrierMeta } from "./store/negotiations.js";
 import { toMandate } from "./domain/mandate.js";
 import { DEFAULT_MANDATE } from "./domain/defaults.js";
-import { RealtimeBridge, type Phase, type Transport } from "./agent/realtime.js";
+import { RealtimeBridge, type Phase, type Transport, type CallIntent } from "./agent/realtime.js";
 import { publish } from "./bus.js";
 import type { Mandate } from "./domain/types.js";
 
@@ -43,8 +43,8 @@ export type SessionOptions = {
   // phone transport uses it to know whether the brief was actually captured
   // before deciding what to do once the call ends.
   onEvent?: (kind: string, data: unknown) => void;
-  // Winner callback: confirm and book, do not re-negotiate.
-  confirming?: boolean;
+  // Why this call is happening (see CallIntent).
+  intent?: CallIntent;
 };
 
 export type Session = {
@@ -73,7 +73,7 @@ export function startSession(opts: SessionOptions): Session {
       },
       onFinal: opts.onFinal,
     },
-    { phase: opts.mode, transport: opts.transport, confirming: opts.confirming }
+    { phase: opts.mode, transport: opts.transport, intent: opts.intent }
   );
 
   publish({

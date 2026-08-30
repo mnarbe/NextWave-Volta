@@ -5,6 +5,7 @@
 // defines behaviour and tone.
 // -----------------------------------------------------------------------------
 import type { Mandate } from "../domain/types.js";
+import type { CallIntent } from "./realtime.js";
 
 // -----------------------------------------------------------------------------
 // PHASE 0 — INTAKE with the CLIENT.
@@ -128,8 +129,10 @@ export type NegotiationContext = {
   // A ROUND is running: Volta is quoting several carriers at once and will
   // pick a winner afterwards, so it must NOT commit on this call.
   collectingQuotes?: boolean;
-  // This carrier WON the round: Volta is calling back to confirm and book.
-  confirming?: boolean;
+  // WHY this call is happening. This — not the existence of a booking — picks
+  // the script. Deriving it from "do we have a deal with them?" meant every
+  // contact after the booking opened as if something had gone wrong.
+  intent?: CallIntent;
   // What this carrier already quoted, when they are calling back on their own.
   standingOffer?: {
     priceMxn?: number;
@@ -158,7 +161,7 @@ export function buildInstructions(mandate: Mandate, ctx: NegotiationContext = {}
   // committing. The winner gets a second, short confirmation call.
   // The winner callback: this is the second call, and it is short. Terms were
   // agreed a few minutes ago; Volta calls back to confirm and book.
-  const confirmRules = ctx.confirming
+  const confirmRules = ctx.intent === "confirm"
     ? `
 YOU ARE CALLING BACK TO CONFIRM — THIS IS THE SECOND CALL
 ${who} You already spoke a few minutes ago and told them you would come back if
@@ -190,7 +193,7 @@ you went ahead. You are going ahead: they won the load. This call is short.
   const b = ctx.booking;
   const bookedRules = b
     ? `
-YOU HAVE ALREADY BOOKED THIS CARRIER — THE NUMBERS ARE SETTLED
+THIS CARRIER ALREADY HAS THE LOAD — THE NUMBERS ARE SETTLED
 ${who} This load is theirs. What was agreed, and what you must not contradict:
 - Agreed price: ${b.priceMxn != null ? `${b.priceMxn} MXN` : "(not recorded)"}
 - Agreed pickup: ${b.pickupTime || "(not recorded)"}
@@ -203,15 +206,21 @@ already happened. If you cannot remember a figure, say so and check; do not
 invent one, and do not fall back to the client's cap: the cap is YOUR limit, not
 their price.
 
-WHAT THIS CALL IS FOR
-They are calling because something changed. Your job is to find out exactly
-what, and then follow the rule below — you do not get to decide on your own.
-1. Greet them by name, confirm the booking as it stands in one sentence, and ask
-   what's changed.
-2. As soon as you know what they want — a different price, a different pickup, a
+WHAT THIS CALL IS FOR — YOU DO NOT KNOW YET
+They rang you. You have no idea why, and MOST OF THE TIME IT IS NOTHING WRONG:
+a question about the address, a driver name, someone confirming a detail. Do not
+open braced for bad news. No "is there a problem?", no "what's gone wrong", no
+apologising in advance. You have a booking with them and it is in good standing;
+carry yourself that way.
+1. Greet them by name, say the booking is in front of you and read it back in
+   one short line, then ask what you can do for them. Then LISTEN.
+2. If they just wanted a detail confirmed, confirm it and let them go. That is a
+   complete, successful call — do not go fishing for a problem that is not there.
+3. Only if THEY tell you something has changed do you go on:
+4. As soon as you know what they want — a different price, a different pickup, a
    new condition, or they cannot do the job at all — call request_change with
    ONLY the parts that changed.
-3. request_change answers with the decision. It is not a suggestion:
+5. request_change answers with the decision. It is not a suggestion:
    - "accept_yourself": the change still fits what the client authorised. Tell
      them it works, confirm the new terms out loud, and close normally.
    - "must_ask_the_client": you are NOT authorised. Tell them plainly that this
@@ -219,7 +228,7 @@ what, and then follow the rule below — you do not get to decide on your own.
      need to check with them, and that YOU WILL CALL THEM BACK shortly with an
      answer. Do not promise which way it will go. Do not haggle. Thank them, say
      goodbye, then call end_negotiation.
-4. Whatever happens, record what they told you with log_carrier_offer.
+6. Whatever happens, record what they told you with log_carrier_offer.
 
 Never tell them "that's fine" before request_change has answered.
 `
@@ -229,7 +238,7 @@ Never tell them "that's fine" before request_change has answered.
   // who they are and what they quoted, and wants to hear what changed.
   const o = ctx.standingOffer;
   const inboundRules =
-    o && !ctx.confirming && !ctx.collectingQuotes
+    o && ctx.intent === "inbound" && !ctx.collectingQuotes
       ? `
 THEY ARE CALLING YOU, AND YOU KNOW THEM
 ${who} You already have a quote from them on this load:
@@ -244,6 +253,50 @@ ${o.conditions?.length ? `- Conditions they attached: ${o.conditions.join(", ")}
   If it is above, negotiate under the rules below.
 - Close by telling them where things stand, and call end_negotiation with the
   updated picture.
+`
+      : "";
+
+  // You told them you would check with the client, and you have. Neither of
+  // these is a negotiation and neither is bad news to be braced for: one is a
+  // yes, the other is a no. Say which, plainly, and finish the call.
+  const approvedRules =
+    ctx.intent === "change_approved"
+      ? `
+YOU ARE CALLING BACK WITH THE CLIENT'S ANSWER — THEY SAID YES
+${who} Last time you spoke they asked for a change and you said you would check
+with the client. You did, and the client accepted. This is good news and a short
+call. Do NOT open as if there is a problem: there is not one.
+- Remind them who you are and that you are calling back about the change they
+  raised, and tell them straight away that the client is happy to go ahead.
+- Read the FINAL terms back in one breath — price in MXN, pickup date and time,
+  and any condition — and ask them to confirm that still works.
+- If they confirm: call check_mandate with those terms, then propose_commitment,
+  then end_negotiation with outcome "deal".
+- Then tell them a confirmation email is going to both sides${
+          ctx.carrierEmail ? ` — theirs to ${ctx.carrierEmail}` : ""
+        }, with a
+  link each has to click, and that nothing is final until they do. Thank them
+  and say goodbye properly.
+- Do NOT reopen the price and do NOT ask for anything extra. The terms are the
+  ones just approved.
+`
+      : "";
+
+  const rejectedRules =
+    ctx.intent === "change_rejected"
+      ? `
+YOU ARE CALLING BACK WITH THE CLIENT'S ANSWER — THEY SAID NO
+${who} Last time you spoke they asked for a change and you said you would check
+with the client. You did, and the client cannot accept it. Be straight, be brief
+and be decent about it.
+- Remind them who you are, and say plainly that you checked and the client
+  cannot go ahead on those terms, so you have to cancel this booking.
+- Do NOT blame them. Do NOT invent a reason the client did not give you. Do NOT
+  offer a middle ground: you were not authorised to negotiate one.
+- If they come back with something different, do not accept it on this call —
+  use request_change and follow what it tells you.
+- Thank them for their time, say you will keep them in mind for the next load,
+  and close with end_negotiation and outcome "no_deal".
 `
       : "";
 
@@ -291,7 +344,15 @@ hear the whole goodbye.
 
   return buildNegotiationPrompt(
     mandate,
-    bookedRules || confirmRules || roundRules || inboundRules,
+    // WHY we are on the call decides the script, in this order. The booking
+    // only gets a say when nothing else explains the call — that is, when they
+    // rang us and we do not know what they want yet.
+    confirmRules ||
+      approvedRules ||
+      rejectedRules ||
+      roundRules ||
+      bookedRules ||
+      inboundRules,
     ctx
   );
 }

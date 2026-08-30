@@ -15,6 +15,7 @@ import { publish } from "../bus.js";
 import { placeCall } from "./twilio.js";
 import { expectCarrier } from "./routing.js";
 import { dialWhenFree, SETTLE_MS } from "./line.js";
+import type { CallIntent } from "../agent/realtime.js";
 import { loadRoster } from "../negotiation/roster.js";
 import { pendingChange, lastResolvedChange } from "../negotiation/escalation.js";
 
@@ -41,6 +42,7 @@ function carrierNumber(carrierId?: string): string | undefined {
 function ring(opts: {
   to: string;
   mode: "escalate" | "negotiate";
+  intent?: CallIntent;
   carrier?: string;
   callId: string;
   kind: string;
@@ -56,7 +58,12 @@ function ring(opts: {
   // Hold until the call that triggered this has actually hung up.
   dialWhenFree(async () => {
     try {
-      const call = await placeCall({ to: opts.to, mode: opts.mode, carrier: opts.carrier });
+      const call = await placeCall({
+        to: opts.to,
+        mode: opts.mode,
+        carrier: opts.carrier,
+        intent: opts.intent,
+      });
       console.log(`[escalation] ${opts.mode} call to ${opts.to}, sid=${call.sid}`);
     } catch (err: any) {
       console.error(`[escalation] ${opts.mode} call failed: ${err.message}`);
@@ -123,9 +130,12 @@ export function reportBackToCarrier(fromCallId: string): boolean {
   console.log(
     `[escalation] client said ${change.status} — telling ${change.carrierName} at ${to}`
   );
+  // Tell the call WHY it is happening: coming back with a yes reads nothing
+  // like coming back with a no, and neither is "something has gone wrong".
   ring({
     to,
     mode: "negotiate",
+    intent: change.status === "approved" ? "change_approved" : "change_rejected",
     carrier: change.carrierName,
     callId: fromCallId,
     kind: "carrier_report_scheduled",

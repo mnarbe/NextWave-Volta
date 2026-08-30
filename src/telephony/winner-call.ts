@@ -85,7 +85,7 @@ export function callWinner(decision: RoundDecision): void {
         to,
         mode: "negotiate",
         carrier: neg.carrierName,
-        confirming: true,
+        intent: "confirm",
       });
       console.log(`[winner] confirmation call to ${to}, sid=${call.sid}`);
     } catch (err: any) {

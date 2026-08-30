@@ -11,7 +11,7 @@
 // -----------------------------------------------------------------------------
 import twilioSdk from "twilio";
 import { config, twilioReady, twilioMissing } from "../config.js";
-import type { Phase } from "../agent/realtime.js";
+import type { Phase, CallIntent } from "../agent/realtime.js";
 
 let client: ReturnType<typeof twilioSdk> | null = null;
 
@@ -39,8 +39,8 @@ export type StreamParams = {
   mode: Phase;
   // Carrier name, if we know it upfront (UI only).
   carrier?: string;
-  // Winner callback: confirm and book instead of collecting another quote.
-  confirming?: boolean;
+  // Why the call is being placed (see CallIntent). Rides as a <Parameter>.
+  intent?: CallIntent;
   // The other party's number (E.164), whichever side dialled. The media
   // stream needs it to hand off to the next call when this one ends.
   peer?: string;
@@ -73,7 +73,7 @@ export function streamTwiml(params: StreamParams): string {
     `<Parameter name="mode" value="${xmlEscape(params.mode)}"/>`,
     params.peer ? `<Parameter name="peer" value="${xmlEscape(params.peer)}"/>` : "",
     params.carrier ? `<Parameter name="carrier" value="${xmlEscape(params.carrier)}"/>` : "",
-    params.confirming ? `<Parameter name="confirming" value="1"/>` : "",
+    params.intent ? `<Parameter name="intent" value="${xmlEscape(params.intent)}"/>` : "",
   ].join("");
 
   return (
@@ -90,7 +90,7 @@ export async function placeCall(opts: {
   to: string;
   mode: Phase;
   carrier?: string;
-  confirming?: boolean;
+  intent?: CallIntent;
 }) {
   const call = await twilioClient().calls.create({
     to: opts.to,
@@ -98,7 +98,7 @@ export async function placeCall(opts: {
     twiml: streamTwiml({
       mode: opts.mode,
       carrier: opts.carrier,
-      confirming: opts.confirming,
+      intent: opts.intent,
       peer: opts.to,
     }),
     statusCallback: `${config.publicUrl}/twilio/status`,
