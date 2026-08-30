@@ -245,6 +245,10 @@ This script acts like Twilio, connects to `/twilio/media`, and writes the genera
 
 ## Decision log
 
+The log submitted for the hackathon, with timestamps, is in
+[DECISION_LOG.md](DECISION_LOG.md). The table below is the standing summary of
+the choices that shape the code.
+
 | Decision                                           | Why                                                                                                                     |
 | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | Validate mandates in code                          | A model can misunderstand an instruction. Price, time, and condition checks must be deterministic.                      |
