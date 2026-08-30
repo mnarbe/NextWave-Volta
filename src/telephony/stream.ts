@@ -30,12 +30,12 @@ import type { Phase, CallIntent } from "../agent/realtime.js";
 
 // The script this call runs. Anything unrecognised means intake.
 function toPhase(v: string | null): Phase {
-  return v === "negotiate" || v === "escalate" ? v : "intake";
+  return v === "negotiate" || v === "escalate" || v === "report" ? v : "intake";
 }
 
 // Anything we do not recognise means the other side rang us.
 function toIntent(v: string | null): CallIntent {
-  return v === "quote" || v === "confirm" || v === "change_approved" || v === "change_rejected"
+  return v === "quote" || v === "confirm" || v === "change_approved" || v === "change_rejected" || v === "client_report"
     ? v
     : "inbound";
 }
@@ -229,7 +229,7 @@ export function handleTwilioMedia(ws: WebSocket, req: IncomingMessage) {
           kind: "phone_call_started",
           callId: session.callId,
           transport: "phone",
-          data: { callSid, mode, carrier: carrierHint },
+          data: { callSid, mode, carrier: carrierHint, intent },
         });
         break;
       }

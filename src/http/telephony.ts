@@ -17,6 +17,7 @@ import {
 } from "../telephony/twilio.js";
 import { resolveInboundParty, phaseFor } from "../telephony/routing.js";
 import { localOnly } from "./local-only.js";
+import { callClientReport } from "../telephony/client-report.js";
 
 export const telephonyRoutes = Router();
 
@@ -151,6 +152,14 @@ telephonyRoutes.post("/call", localOnly, async (req, res) => {
     // 21215 = country not enabled in Voice Dialing Permissions.
     res.status(400).json({ error: err.message, code: err.code });
   }
+});
+
+// The dashboard explicitly requests this after a round. Unlike carrier calls,
+// this never starts automatically and cannot feed profile data into a deal.
+telephonyRoutes.post("/client-report", localOnly, (_req, res) => {
+  const result = callClientReport();
+  if (!result.ok) return res.status(400).json(result);
+  res.json(result);
 });
 
 telephonyRoutes.post("/call/:sid/hangup", localOnly, async (req, res) => {

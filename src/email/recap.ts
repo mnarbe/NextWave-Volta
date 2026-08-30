@@ -22,6 +22,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { config } from "../config.js";
 import { sendEmail, emailReady } from "./resend.js";
 import type { Commitment, CommitmentRecap, Mandate } from "../domain/types.js";
+import { findCarrierProfileByName } from "../intelligence/carrier-profiles.js";
 
 export type Party = "client" | "carrier";
 
@@ -66,7 +67,46 @@ function pickup(iso: string): string {
     : d.toLocaleString("en-US", { dateStyle: "full", timeStyle: "short" });
 }
 
-function body(c: Commitment, m: Mandate | null, party: Party) {
+function intelligenceBlock(c: Commitment, party: Party) {
+  // Only the client gets carrier history. It is context before their approval,
+  // not a term the carrier needs to receive in their confirmation mail.
+  if (party !== "client") return { text: "", html: "" };
+  const profile = findCarrierProfileByName(c.agreedByName);
+  if (!profile) return { text: "", html: "" };
+
+  const booked = profile.sample.bookedJobs;
+  const changes = profile.stability;
+  const median =
+    profile.pricing.medianFinalPriceMxn == null
+      ? "Not enough price data"
+      : money(profile.pricing.medianFinalPriceMxn);
+  const text = [
+    "Carrier intelligence (informational)",
+    `Historical demo sample: ${profile.sample.seededDemoJobs} jobs.`,
+    `Median booked price: ${median}.`,
+    `Post-booking changes: ${changes.postBookingChanges}/${booked} booked jobs.`,
+    `Pickup changes after booking: ${changes.pickupChanges}/${booked} booked jobs.`,
+    `Price-increase requests after booking: ${changes.priceIncreaseRequests}/${booked} booked jobs.`,
+    "This profile is additional context only. Today's selection was based on the current offer and your mandate.",
+  ].join("\n");
+
+  const html = `
+  <div style="border:1px solid #cdd7ee;background:#f6f8ff;border-radius:8px;padding:14px 16px;margin:20px 0;font-size:14px;line-height:1.5">
+    <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#4f5d7a;margin-bottom:6px">Carrier intelligence</div>
+    <p style="margin:0 0 8px;font-weight:600">Historical demo sample: ${profile.sample.seededDemoJobs} jobs</p>
+    <ul style="margin:0;padding-left:18px">
+      <li>Median booked price: ${median}</li>
+      <li>Post-booking changes: ${changes.postBookingChanges}/${booked} booked jobs</li>
+      <li>Pickup changes after booking: ${changes.pickupChanges}/${booked} booked jobs</li>
+      <li>Price-increase requests after booking: ${changes.priceIncreaseRequests}/${booked} booked jobs</li>
+    </ul>
+    <p style="font-size:12px;color:#56617a;margin:10px 0 0">This profile is additional context only. Today's selection was based on the current offer and your mandate.</p>
+  </div>`;
+
+  return { text, html };
+}
+
+export function buildRecapBody(c: Commitment, m: Mandate | null, party: Party) {
   const other = party === "client" ? "the carrier" : "the client";
   const rows: Array<[string, string]> = [
     ["Price", money(c.priceMxn)],
@@ -79,12 +119,14 @@ function body(c: Commitment, m: Mandate | null, party: Party) {
   if (c.conditions.length) rows.push(["Conditions", c.conditions.join(", ")]);
 
   const url = confirmUrl(c.id, party);
+  const intelligence = intelligenceBlock(c, party);
 
   const text = [
     `Volta — confirmation of what was agreed on the call`,
     ``,
     ...rows.map(([k, v]) => `${k}: ${v}`),
     ``,
+    ...(intelligence.text ? [intelligence.text, ``] : []),
     `This booking is not final until both sides confirm.`,
     `Confirm here: ${url}`,
     ``,
@@ -104,6 +146,7 @@ function body(c: Commitment, m: Mandate | null, party: Party) {
       )
       .join("")}
   </table>
+  ${intelligence.html}
   <p style="font-size:14px;margin:20px 0 12px">
     This booking is <strong>not final</strong> until both sides confirm. We are also waiting on ${other}.
   </p>
@@ -137,7 +180,7 @@ export async function sendRecap(
 
   const results = await Promise.all(
     targets.map(async ({ party, to }) => {
-      const { text, html } = body(commitment, mandate, party);
+      const { text, html } = buildRecapBody(commitment, mandate, party);
       const subject = `Booking confirmation — ${money(commitment.priceMxn)}, pickup ${pickup(
         commitment.pickupTime
       )}`;

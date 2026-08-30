@@ -19,6 +19,7 @@
     <span id="hintEl" class="hint">Call Volta's number to hand over the job.</span>
     <span class="spacer"></span>
     <button id="roundBtn">▶ Start round</button>
+    <button id="clientReportBtn" hidden>☎ Call client summary</button>
     <button id="startBtn">🎙 Browser mode</button>
     <button id="stopBtn" disabled>Stop</button>
     <button id="forceCutBtn" hidden>End intake →</button>
@@ -66,6 +67,12 @@
 
       <h2>Carrier negotiation</h2>
       <div id="carriers" class="hint">No carrier call yet.</div>
+
+      <h2>Carrier intelligence</h2>
+      <div class="intelligence-note">
+        Historical demo data. Volta reports these signals but does not use them to steer negotiations.
+      </div>
+      <div id="carrierProfiles" class="hint">Loading carrier profiles…</div>
 
       <h2>Backend activity</h2>
       <div id="tools"></div>

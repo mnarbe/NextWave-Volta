@@ -6,6 +6,52 @@
 // -----------------------------------------------------------------------------
 import type { Mandate } from "../domain/types.js";
 import type { CallIntent } from "./realtime.js";
+import type { ClientCarrierReport } from "../intelligence/client-report.js";
+
+function mxn(value: number | undefined): string {
+  return value == null ? "not recorded" : `${value.toLocaleString("en-US")} MXN`;
+}
+
+// This call follows a closed round. The report itself is calculated by code;
+// the model only delivers it naturally and cannot use it to negotiate.
+export function buildClientReportInstructions(report: ClientCarrierReport): string {
+  const profile = report.profile;
+  const sample = profile?.sample;
+  const stability = profile?.stability;
+  const pricing = profile?.pricing;
+  const facts = profile
+    ? [
+        `- Historical demo sample: ${sample?.seededDemoJobs ?? sample?.negotiations ?? 0} jobs.`,
+        `- Median booked price: ${mxn(pricing?.medianFinalPriceMxn)}.`,
+        `- Post-booking changes: ${stability?.postBookingChanges ?? 0}/${sample?.bookedJobs ?? 0} booked jobs.`,
+        `- Pickup changes after booking: ${stability?.pickupChanges ?? 0}/${sample?.bookedJobs ?? 0} booked jobs.`,
+        `- Price-increase requests after booking: ${stability?.priceIncreaseRequests ?? 0}/${sample?.bookedJobs ?? 0} booked jobs.`,
+      ].join("\n")
+    : "- No historical profile is available for this carrier.";
+
+  return `
+You are Volta. You are making a SHORT outbound update call to your client after
+a carrier round has closed. This is an informational report, not a negotiation.
+
+Say, in concise natural English:
+1. You selected ${report.carrierName} at ${mxn(report.currentPriceMxn)} based on
+   today's quote and the client's mandate.
+2. Give the factual historical context below.
+3. State clearly that the historical profile is additional context only and did
+   NOT influence today's selection.
+4. Thank the client and end the call.
+
+FACTS CALCULATED BY CODE. Use only these facts. Do not add a reputation label,
+prediction, recommendation, explanation, or number that is not written here.
+Do not say the words "database" or "AI". Do not ask questions, reopen the
+negotiation, or contact a carrier. If interrupted, briefly acknowledge the
+interruption, restate the factual update, and close.
+
+${facts}
+
+After your closing sentence, call end_client_report.
+`.trim();
+}
 
 // -----------------------------------------------------------------------------
 // PHASE 0 — INTAKE with the CLIENT.

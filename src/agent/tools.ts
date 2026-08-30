@@ -166,6 +166,18 @@ export const intakeToolDefinitions = [
   },
 ] as const;
 
+// Read-only post-round call to the client. It has no access to mandate or
+// negotiation tools, so it cannot change the live workflow.
+export const clientReportToolDefinitions = [
+  {
+    type: "function",
+    name: "end_client_report",
+    description:
+      "End the informational client report after you have stated every fact and said goodbye.",
+    parameters: { type: "object", properties: {} },
+  },
+] as const;
+
 // ---------------------------------------------------------------------------
 // ESCALATION tools — Volta calls the PROVIDER because a booked carrier changed
 // something it is not authorised to accept. The only outcome that matters is
@@ -538,6 +550,11 @@ export async function runTool(
     }
 
     case "end_intake": {
+      result = { ok: true, ending: true };
+      break;
+    }
+
+    case "end_client_report": {
       result = { ok: true, ending: true };
       break;
     }

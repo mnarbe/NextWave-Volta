@@ -92,6 +92,16 @@
   .carrier summary { cursor: pointer; color: #8a90a0; font-size: 12px; }
   .carrier details pre { margin: 6px 0 0; white-space: pre-wrap; word-break: break-word;
                          color: #b8bdc9; font-size: 11px; }
+  /* --- carrier intelligence: read-only historical context ---------------- */
+  .intelligence-note { color: #8a90a0; font-size: 12px; line-height: 1.45; margin: -4px 0 10px; }
+  .intelligence-card { border: 1px solid #2b3040; border-left: 3px solid #6e8fd7;
+                       border-radius: 10px; padding: 13px; margin-bottom: 10px; background: #12161f; }
+  .intel-sample { color: #aeb8cb; background: #1b2537; border-radius: 20px; padding: 2px 7px;
+                  font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .intel-source { color: #8a90a0; font-size: 11px; margin: -2px 0 8px; }
+  .intel-kv { margin-top: 0; }
+  .intel-caution { color: #f5c451; border-top: 1px solid #2b3040; margin-top: 10px; padding-top: 8px;
+                   font-size: 12px; }
   .decision { border: 1px solid #2b3040; border-radius: 12px; padding: 16px;
               margin-bottom: 20px; background: #12161f; }
   .decision.deal { border-color: #2c6e49; box-shadow: 0 0 0 1px #2c6e4933; }

@@ -17,6 +17,7 @@
 export const ui = {
   dot: document.getElementById("dot"),
   roundBtn: document.getElementById("roundBtn"),
+  clientReportBtn: document.getElementById("clientReportBtn"),
   startBtn: document.getElementById("startBtn"),
   stopBtn: document.getElementById("stopBtn"),
   forceCutBtn: document.getElementById("forceCutBtn"),
@@ -39,6 +40,7 @@ const mPrice = document.getElementById("mPrice");
 const mFields = document.getElementById("mFields");
 const mStatus = document.getElementById("mStatus");
 const carriersEl = document.getElementById("carriers");
+const carrierProfilesEl = document.getElementById("carrierProfiles");
 const decisionEl = document.getElementById("decision");
 const phoneNum = document.getElementById("phoneNum");
 const phoneState = document.getElementById("phoneState");
@@ -99,6 +101,11 @@ export function setCallButtonEnabled(on) {
 
 export function setHangupVisible(on) {
   ui.hangBtn.hidden = !on;
+}
+
+export function setClientReportAvailable(on) {
+  ui.clientReportBtn.hidden = !on;
+  ui.clientReportBtn.disabled = !on;
 }
 
 // --- conversation lanes ------------------------------------------------------
@@ -316,6 +323,73 @@ function renderCarriers() {
   carriersEl.innerHTML = list.map(carrierCard).join("");
 }
 
+// --- carrier intelligence ----------------------------------------------------
+// These profiles are read-only dashboard information. They deliberately do not
+// share state with the carrier cards or the round comparator.
+function fmtPercent(rate) {
+  return `${Math.round(Number(rate || 0) * 100)}%`;
+}
+
+function profileCard(profile, lowestMedian) {
+  const price = profile.pricing?.medianFinalPriceMxn;
+  const sample = profile.sample || {};
+  const stability = profile.stability || {};
+  const negotiation = profile.negotiation || {};
+  const source = sample.observedJobs
+    ? `${sample.seededDemoJobs || 0} demo + ${sample.observedJobs} observed records`
+    : `${sample.seededDemoJobs || sample.negotiations || 0} historical demo jobs`;
+  const pricePosition = price != null && price === lowestMedian ? "Lowest median price" : "Median booked price";
+  const changeRate = sample.bookedJobs
+    ? `${stability.postBookingChanges || 0}/${sample.bookedJobs} booked jobs`
+    : "No booked-job sample";
+  const rows = [
+    [pricePosition, price != null ? `${fmtMxn(price)} MXN` : "No price sample"],
+    ["Average concession", profile.pricing?.averageConcessionRate != null ? fmtPercent(profile.pricing.averageConcessionRate) : "No opening-price sample"],
+    ["Post-booking changes", changeRate],
+    ["Pickup changes", `${stability.pickupChanges || 0}/${sample.bookedJobs || 0}`],
+    ["Price-increase requests", `${stability.priceIncreaseRequests || 0}/${sample.bookedJobs || 0}`],
+    ["Average refusals", Number(negotiation.averageRefusals || 0).toFixed(1)],
+  ];
+  const caution = stability.cancellations
+    ? `<div class="intel-caution">${stability.cancellations}/${sample.bookedJobs || 0} cancellation recorded after booking</div>`
+    : "";
+
+  return `
+    <div class="intelligence-card">
+      <div class="carrier-head">
+        <span class="carrier-name">${escapeHtml(profile.carrierName || "Carrier")}</span>
+        <span class="intel-sample">n=${sample.negotiations || 0}</span>
+      </div>
+      <div class="intel-source">${escapeHtml(source)}</div>
+      <dl class="kv intel-kv">${rows.map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd>`).join("")}</dl>
+      ${caution}
+    </div>`;
+}
+
+export function renderCarrierProfiles(profiles) {
+  if (!Array.isArray(profiles) || !profiles.length) {
+    carrierProfilesEl.className = "hint";
+    carrierProfilesEl.textContent = "No historical carrier data is available.";
+    return;
+  }
+  const prices = profiles
+    .map((profile) => profile.pricing?.medianFinalPriceMxn)
+    .filter((price) => price != null);
+  const lowestMedian = prices.length ? Math.min(...prices) : null;
+  carrierProfilesEl.className = "";
+  carrierProfilesEl.innerHTML = profiles.map((profile) => profileCard(profile, lowestMedian)).join("");
+}
+
+export function refreshCarrierProfiles() {
+  return fetch("/carrier-profiles")
+    .then((r) => (r.ok ? r.json() : []))
+    .then(renderCarrierProfiles)
+    .catch(() => {
+      carrierProfilesEl.className = "hint";
+      carrierProfilesEl.textContent = "Carrier intelligence is unavailable.";
+    });
+}
+
 // When a round has closed, its result takes over the "Final decision" panel.
 let roundResult = null;
 
@@ -344,6 +418,9 @@ function renderRoundBanner(d) {
 
 export function renderRoundResult(decision) {
   roundResult = decision || null;
+  // A human carrier may still need a separate confirmation call. client.js
+  // enables the report button only once that call has finished.
+  setClientReportAvailable(false);
   renderDecision();
 }
 
@@ -429,6 +506,7 @@ export function clearNegotiations() {
   negs.clear();
   resetLanes();
   roundResult = null;
+  setClientReportAvailable(false);
   renderCarriers();
   renderDecision();
 }
@@ -451,9 +529,9 @@ export function initConversation() {
 }
 
 export function loadInitialState() {
-  return fetch("/mandate")
+  const mandate = fetch("/mandate")
     .then((r) => r.json())
     .then((m) => m && renderMandate(m))
-    .catch(() => {})
-    .finally(refreshNegotiations);
+    .catch(() => {});
+  return Promise.all([mandate, refreshNegotiations(), refreshCarrierProfiles()]);
 }
