@@ -11,10 +11,11 @@ import {
   streamTwiml,
   placeCall,
   hangup,
-  configureNumber,
+  configureAllNumbers,
   geoPermission,
   guessIso,
 } from "../telephony/twilio.js";
+import { resolveInboundParty, phaseFor } from "../telephony/routing.js";
 
 export const telephonyRoutes = Router();
 
@@ -36,13 +37,23 @@ function verifyTwilio(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-// INBOUND call to Volta's number: the client dials and lands here. We answer
-// with the TwiML that opens the media stream against /twilio/media.
+// INBOUND call to Volta's number. The same number serves both roles, so the
+// first thing to work out is WHO is calling — see telephony/routing.ts. We
+// answer with the TwiML that opens the media stream against /twilio/media.
 telephonyRoutes.post("/twilio/voice", verifyTwilio, (req, res) => {
-  // ?mode=negotiate on the webhook URL if you want inbound calls to negotiate.
-  const mode = req.query.mode === "negotiate" ? "negotiate" : "intake";
-  console.log(`[twilio] inbound call from ${req.body?.From} (mode=${mode})`);
-  res.type("text/xml").send(streamTwiml({ mode }));
+  const from = String(req.body?.From || "");
+  const to = String(req.body?.To || "");
+  // ?mode=... on the webhook URL forces a role, for testing.
+  const forced = req.query.mode;
+  const party =
+    forced === "negotiate"
+      ? "carrier"
+      : forced === "intake"
+        ? "provider"
+        : resolveInboundParty(from, to);
+  const mode = phaseFor(party);
+  console.log(`[twilio] inbound ${from} -> ${to} | party=${party} mode=${mode}`);
+  res.type("text/xml").send(streamTwiml({ mode, peer: from }));
 });
 
 // Call lifecycle (initiated / ringing / answered / completed).
@@ -93,7 +104,7 @@ telephonyRoutes.get("/twilio/health", async (_req, res) => {
 // Points the number at this machine (same as editing it in the console).
 telephonyRoutes.post("/twilio/setup", async (_req, res) => {
   try {
-    res.json(await configureNumber());
+    res.json(await configureAllNumbers());
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
@@ -107,7 +118,30 @@ telephonyRoutes.post("/call", async (req, res) => {
   if (!/^\+[1-9]\d{6,15}$/.test(to)) {
     return res.status(400).json({ error: "to must be E.164, e.g. +5215512345678" });
   }
+  // Dialling one of our own numbers makes Volta call itself: the outbound call
+  // hits our own inbound webhook, a second Volta session answers, and the two
+  // agents talk to each other. Put the human's phone here, not Volta's number.
+  const ours = [config.twilio.number, config.twilio.carrierNumber].filter(Boolean);
+  if (ours.some((n) => n.replace(/[^\d+]/g, "") === to.replace(/[^\d+]/g, ""))) {
+    return res.status(400).json({
+      error:
+        `${to} is Volta's own number — calling it would just make Volta talk to ` +
+        `itself. Dial the person's phone instead.`,
+    });
+  }
   const mode = req.body?.mode === "intake" ? "intake" : "negotiate";
+
+  // {"dryRun": true} answers with the TwiML we WOULD send, without dialling.
+  // Handy to check which script a call is about to run without spending one.
+  if (req.body?.dryRun) {
+    return res.json({
+      dryRun: true,
+      to,
+      mode,
+      twiml: streamTwiml({ mode, carrier: req.body?.carrier, peer: to }),
+    });
+  }
+
   try {
     const call = await placeCall({ to, mode, carrier: req.body?.carrier });
     console.log(`[twilio] calling ${to} (mode=${mode}) sid=${call.sid}`);

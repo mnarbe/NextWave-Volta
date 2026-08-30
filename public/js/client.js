@@ -80,6 +80,25 @@ function onServerMessage(ev) {
       if (phone) view.addTool("tool_result", { name: "call started", result: msg.data });
       break;
 
+    // --- handoff: after the intake, Volta calls the same number back ----------
+    case "handoff_scheduled": {
+      const secs = Math.round((msg.data.delayMs || 0) / 1000);
+      view.setPhoneState(`calling ${msg.data.to} back in ${secs}s…`, "live");
+      view.addMessage("agent", `— calling ${msg.data.to} back as the carrier —`);
+      break;
+    }
+
+    case "handoff_skipped":
+      // Most often: the caller withheld their number, so we cannot ring back.
+      view.setPhoneState(`no callback (${msg.data.reason}) — dial manually`, "err");
+      view.addTool("tool_result", { name: "handoff skipped", result: msg.data });
+      break;
+
+    case "handoff_failed":
+      view.setPhoneState(`callback failed: ${msg.data.error}`, "err");
+      view.addTool("tool_result", { name: "handoff failed", result: msg.data });
+      break;
+
     // --- business -------------------------------------------------------------
     case "mandate_captured":
       view.renderMandate(msg.data, { justCaptured: true });
@@ -98,11 +117,11 @@ function onServerMessage(ev) {
       el.forceCutBtn.hidden = true;
       view.setMandateDone("Intake complete — Volta hung up with the client.");
       view.addMessage("agent", "— end of intake —");
-      // Over the phone the next step is dialling the carrier; in browser mode we
-      // simulate the inbound call like before.
+      // Over the phone Volta rings the same number back as the carrier; the
+      // handoff_* events below take it from here. In browser mode we simulate
+      // the inbound call like before.
       if (phone) {
-        view.setHint("Now call the carrier from the bar above.");
-        el.carrierNum.focus();
+        view.setHint("Intake done — Volta is calling back to negotiate.");
       } else {
         view.showIncomingCall();
       }

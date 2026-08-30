@@ -72,7 +72,7 @@ async function main() {
     console.error(`Falta en .env: ${twilioMissing().join(", ")}`);
     process.exit(1);
   }
-  const { twilioClient, configureNumber, geoPermission, guessIso } = await import(
+  const { twilioClient, configureAllNumbers, geoPermission, guessIso } = await import(
     "../src/telephony/twilio.js"
   );
 
@@ -81,8 +81,9 @@ async function main() {
   console.log(`Cuenta: ${account.friendlyName} (${account.type}, ${account.status})`);
 
   // --- 3 y 4. el número apunta acá -----------------------------------------
-  const number = await configureNumber();
-  console.log(`Número ${number.phoneNumber} -> ${number.voiceUrl}`);
+  for (const n of await configureAllNumbers()) {
+    console.log(`Número ${n.phoneNumber} (${n.role}) -> ${n.voiceUrl}`);
+  }
   console.log(`Media stream: ${config.publicWsUrl}/twilio/media`);
 
   // --- 5. geo-permisos del destino -----------------------------------------

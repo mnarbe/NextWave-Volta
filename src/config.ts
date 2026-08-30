@@ -36,12 +36,23 @@ export const config = {
   twilio: {
     accountSid: process.env.TWILIO_ACCOUNT_SID || "",
     authToken: process.env.TWILIO_AUTH_TOKEN || "",
-    // Volta's number, E.164 (e.g. +15856011456).
+    // Volta's number, E.164 (e.g. +15856011456). Calls in and out use this one.
     number: process.env.TWILIO_NUMBER || "",
+    // OPTIONAL second number. If you buy one and point its voice webhook here
+    // too, calls to it are treated as CARRIERS calling in, and calls to the
+    // main number as the PROVIDER. That removes the guesswork in
+    // telephony/routing.ts. Leave empty and one number serves both roles.
+    carrierNumber: process.env.TWILIO_CARRIER_NUMBER || "",
     // Verify the X-Twilio-Signature on webhooks. Turn off to poke them by hand
     // with curl.
     validateSignature: process.env.TWILIO_VALIDATE_SIGNATURE !== "0",
   },
+
+  // The phone that plays the carrier in the demo. After an intake, Volta rings
+  // back whoever just called; if it could not learn their number (caller ID
+  // withheld, or the intake happened in browser mode), it falls back to this.
+  // Set it to your own phone and the handoff always fires.
+  demoCarrierNumber: process.env.DEMO_CARRIER_NUMBER || "",
 };
 
 // Can we use the phone? We need credentials, a number and a public URL.

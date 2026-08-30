@@ -20,6 +20,18 @@ function num(v: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+// What the brief still needs before Volta can go negotiate. The client may
+// genuinely not know the container number, so that one is asked for but never
+// required.
+function missingMandateFields(m: NegotiationMandate): string[] {
+  const missing: string[] = [];
+  if (!m.origin) missing.push("origin");
+  if (!m.destination) missing.push("destination");
+  if (!m.pickupWindowStart) missing.push("pickupWindowStart");
+  if (!m.pickupWindowEnd) missing.push("pickupWindowEnd");
+  return missing;
+}
+
 function strArray(v: unknown): string[] {
   return Array.isArray(v) ? v.map((x) => String(x)).filter(Boolean) : [];
 }
@@ -33,8 +45,9 @@ export const intakeToolDefinitions = [
     name: "set_negotiation_mandate",
     description:
       "Save the brief captured from the client so it can be used later to " +
-      "negotiate with carriers. Call this ONCE you have a firm maximum price. " +
-      "maxPriceMxn is the only required field; fill the rest best-effort.",
+      "negotiate with carriers. Call this as soon as you have a firm maximum " +
+      "price, and again every time you fill in another field. The result lists " +
+      "which required fields are still missing, so you know what to ask next.",
     parameters: {
       type: "object",
       properties: {
@@ -290,7 +303,11 @@ export async function runTool(
       saveMandate(mandate);
       // New job: clear the carrier negotiations from the previous run.
       resetNegotiations();
-      result = { saved: true, mandate };
+      // Tell Volta what the brief is still missing, so it knows what to ask
+      // next instead of closing the call half-informed. containerNumber is not
+      // in here: we ask for it once, but the client may simply not have it.
+      const missing = missingMandateFields(mandate);
+      result = { saved: true, mandate, missing, complete: missing.length === 0 };
       break;
     }
 

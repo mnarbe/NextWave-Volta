@@ -33,16 +33,20 @@ function xmlEscape(s: string): string {
 }
 
 export type StreamParams = {
-  // "intake" = talk to the client. "negotiate" = negotiate with a carrier.
+  // "intake" = talk to the provider. "negotiate" = negotiate with a carrier.
   mode: "intake" | "negotiate";
   // Carrier name, if we know it upfront (UI only).
   carrier?: string;
+  // The other party's number (E.164), whichever side dialled. The media
+  // stream needs it to hand off to the next call when this one ends.
+  peer?: string;
 };
 
 // The WSS URL Twilio opens against us, with the mode in the query string.
 export function streamUrl(params: StreamParams): string {
   const q = new URLSearchParams({ mode: params.mode });
   if (params.carrier) q.set("carrier", params.carrier);
+  if (params.peer) q.set("peer", params.peer);
   return `${config.publicWsUrl}/twilio/media?${q.toString()}`;
 }
 
@@ -50,10 +54,28 @@ export function streamUrl(params: StreamParams): string {
 // party's audio and plays back whatever we return. (<Start><Stream> would be
 // listen-only.) When we close the WebSocket the <Connect> ends and, since there
 // is no further TwiML, Twilio hangs up.
+//
+// How the mode/peer reach us matters. We send them BOTH ways:
+//   - as <Parameter> children, which Twilio hands over in the "start" event as
+//     start.customParameters. This is the documented mechanism and the one we
+//     trust.
+//   - in the URL query string, as a fallback (and so that a WebSocket client
+//     connecting by hand, like scripts/fake-twilio.mjs, can still pick a mode).
+// Relying on the query string alone silently dropped the mode: every carrier
+// call fell back to the intake script, and the handoff lost the number to call
+// back.
 export function streamTwiml(params: StreamParams): string {
+  const parameters = [
+    `<Parameter name="mode" value="${xmlEscape(params.mode)}"/>`,
+    params.peer ? `<Parameter name="peer" value="${xmlEscape(params.peer)}"/>` : "",
+    params.carrier ? `<Parameter name="carrier" value="${xmlEscape(params.carrier)}"/>` : "",
+  ].join("");
+
   return (
     `<?xml version="1.0" encoding="UTF-8"?>` +
-    `<Response><Connect><Stream url="${xmlEscape(streamUrl(params))}"/></Connect></Response>`
+    `<Response><Connect>` +
+    `<Stream url="${xmlEscape(streamUrl(params))}">${parameters}</Stream>` +
+    `</Connect></Response>`
   );
 }
 
@@ -67,7 +89,7 @@ export async function placeCall(opts: {
   const call = await twilioClient().calls.create({
     to: opts.to,
     from: config.twilio.number,
-    twiml: streamTwiml({ mode: opts.mode, carrier: opts.carrier }),
+    twiml: streamTwiml({ mode: opts.mode, carrier: opts.carrier, peer: opts.to }),
     statusCallback: `${config.publicUrl}/twilio/status`,
     statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
   });
@@ -81,14 +103,29 @@ export async function hangup(callSid: string) {
 // Points the number at THIS machine (voiceUrl -> /twilio/voice). This is what
 // saves you from editing the webhook by hand in the Twilio console every time
 // the public URL changes.
-export async function configureNumber() {
+// Points EVERY number we use at this machine: the main one, and the optional
+// carrier number if TWILIO_CARRIER_NUMBER is set. A number with an empty
+// voiceUrl simply does nothing when you call it, which is easy to miss.
+export async function configureAllNumbers() {
+  const numbers = [config.twilio.number, config.twilio.carrierNumber].filter(Boolean);
+  const results = [];
+  for (const n of numbers) {
+    results.push({
+      ...(await configureNumber(n)),
+      role: n === config.twilio.carrierNumber ? "carrier" : "provider",
+    });
+  }
+  return results;
+}
+
+export async function configureNumber(phoneNumber = config.twilio.number) {
   const c = twilioClient();
   const [number] = await c.incomingPhoneNumbers.list({
-    phoneNumber: config.twilio.number,
+    phoneNumber,
     limit: 1,
   });
   if (!number) {
-    throw new Error(`Number ${config.twilio.number} is not on this Twilio account.`);
+    throw new Error(`Number ${phoneNumber} is not on this Twilio account.`);
   }
   const updated = await c.incomingPhoneNumbers(number.sid).update({
     voiceUrl: `${config.publicUrl}/twilio/voice`,

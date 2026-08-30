@@ -32,6 +32,10 @@ export type SessionOptions = {
   clearAudio: () => void;
   // Volta finished its closing line: the transport decides how to hang up.
   onFinal: () => void;
+  // Optional peek at the business events of THIS call, on top of the bus. The
+  // phone transport uses it to know whether the brief was actually captured
+  // before deciding what to do once the call ends.
+  onEvent?: (kind: string, data: unknown) => void;
 };
 
 export type Session = {
@@ -53,8 +57,10 @@ export function startSession(opts: SessionOptions): Session {
     {
       sendAudio: opts.sendAudio,
       clearAudio: opts.clearAudio,
-      onEvent: (kind, data) =>
-        publish({ kind, callId, transport: opts.transport, data }),
+      onEvent: (kind, data) => {
+        publish({ kind, callId, transport: opts.transport, data });
+        opts.onEvent?.(kind, data);
+      },
       onFinal: opts.onFinal,
     },
     { phase: opts.mode, transport: opts.transport }

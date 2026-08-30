@@ -13,6 +13,7 @@ import { config } from "../config.js";
 import { log, getCall } from "../store/calls.js";
 import { buildInstructions, buildIntakeInstructions } from "./prompts.js";
 import { toolDefinitions, intakeToolDefinitions, runTool } from "./tools.js";
+import { DEFAULT_MANDATE } from "../domain/defaults.js";
 
 // "intake" = Volta talks to the CLIENT to capture the mandate.
 // "negotiate" = Volta negotiates with a carrier.
@@ -109,11 +110,28 @@ export class RealtimeBridge {
     if (!call) return;
 
     const isIntake = this.phase === "intake";
-    const instructions =
-      isIntake || !call.mandate
-        ? buildIntakeInstructions()
-        : buildInstructions(call.mandate);
+
+    // A negotiation with no mandate used to silently fall back to the intake
+    // script: Volta would greet the carrier as if calling for a quote and then
+    // interrogate them for the brief — origin, destination, container number.
+    // Never do that. If the mandate is missing we still negotiate, against the
+    // default, and say so loudly in the log.
+    if (!isIntake && !call.mandate) {
+      log(this.callId, "error", {
+        where: "realtime.onOpen",
+        msg: "negotiate phase with no mandate — negotiating against defaults",
+      });
+    }
+
+    const instructions = isIntake
+      ? buildIntakeInstructions()
+      : buildInstructions(call.mandate ?? DEFAULT_MANDATE);
     const tools = isIntake ? intakeToolDefinitions : toolDefinitions;
+
+    console.log(
+      `[realtime] call ${this.callId.slice(0, 8)} | phase=${this.phase} ` +
+        `script=${isIntake ? "intake" : "negotiate"} transport=${this.transport}`
+    );
 
     this.send({
       type: "session.update",
@@ -148,19 +166,14 @@ export class RealtimeBridge {
     this.ready = true;
 
     // Volta opens the conversation.
-    this.send({
-      type: "response.create",
-      response: {
-        instructions: isIntake
-          ? "Greet briefly, introduce yourself as Volta, say you are ready to take " +
-            "the job details, and ask the client to walk you through the shipment " +
-            "and their maximum price. Then wait for their reply. Speak in English, " +
-            "at a brisk, efficient pace."
-          : "Greet briefly, introduce yourself as Volta, and say you are calling to get " +
-            "a quote to move a container. Then wait for their reply. Speak in English, " +
-            "at a brisk, efficient pace.",
-      },
-    });
+    //
+    // NOTE: do NOT pass response.instructions here. In the Realtime API those
+    // REPLACE the session instructions for that response, so the opening line
+    // would be generated without the mandate — and the model then invents a
+    // shipment ("a load from Monterrey to Queretaro") or asks the carrier for
+    // details it is supposed to already have. Both prompts describe their own
+    // opening line in step 1, so plain response.create is what we want.
+    this.send({ type: "response.create" });
   }
 
   // Incoming audio from the transport -> OpenAI. It already arrives in the

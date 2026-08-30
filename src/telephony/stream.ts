@@ -20,6 +20,8 @@ import type { WebSocket } from "ws";
 import { log } from "../store/calls.js";
 import { publish } from "../bus.js";
 import { startSession } from "../session.js";
+import { forgetCarrier } from "./routing.js";
+import { scheduleCarrierCallback } from "./handoff.js";
 import type { Phase } from "../agent/realtime.js";
 
 // Marker name we use to hang up only once Volta's closing line has played.
@@ -28,15 +30,26 @@ const FINAL_MARK = "volta-final";
 const FINAL_TIMEOUT_MS = 20_000;
 
 export function handleTwilioMedia(ws: WebSocket, req: IncomingMessage) {
-  const url = new URL(req.url || "/", "http://localhost");
-  const mode: Phase = url.searchParams.get("mode") === "negotiate" ? "negotiate" : "intake";
-  const carrierHint = url.searchParams.get("carrier") || undefined;
+  // Query string values, used as a fallback. Twilio does not reliably carry the
+  // query string of the <Stream url> through, so the authoritative source is
+  // start.customParameters (read in the "start" event below).
+  const query = new URL(req.url || "/", "http://localhost").searchParams;
+
+  let mode: Phase = query.get("mode") === "negotiate" ? "negotiate" : "intake";
+  let carrierHint = query.get("carrier") || undefined;
+  // The other party's number: who called us, or who we called.
+  let peer = query.get("peer") || "";
 
   let streamSid = "";
   let callSid = "";
   let session: ReturnType<typeof startSession> | null = null;
   let finalTimer: NodeJS.Timeout | null = null;
   let closing = false;
+  // Is this intake worth handing off to a negotiation? True as soon as the
+  // brief is captured — we do NOT require Volta to reach end_intake, because
+  // the provider often hangs up the moment they have finished dictating, and
+  // we still want to ring them back as the carrier.
+  let briefCaptured = false;
 
   const toTwilio = (obj: unknown) => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
@@ -61,6 +74,16 @@ export function handleTwilioMedia(ws: WebSocket, req: IncomingMessage) {
         transport: "phone",
         data: { callSid },
       });
+
+      // The intake is done and the line is free: hand off to the negotiation by
+      // calling the same person back, this time as the carrier.
+      console.log(
+        `[stream] call ended | mode=${mode} peer=${peer || "(none)"} ` +
+          `brief=${briefCaptured ? "captured" : "not captured"}`
+      );
+      if (mode === "intake" && briefCaptured) {
+        scheduleCarrierCallback({ to: peer, fromCallId: session.callId });
+      }
     }
   };
 
@@ -83,6 +106,18 @@ export function handleTwilioMedia(ws: WebSocket, req: IncomingMessage) {
         streamSid = msg.start?.streamSid || msg.streamSid || "";
         callSid = msg.start?.callSid || "";
 
+        // The <Parameter> values from the TwiML. These win over the query
+        // string: they are what Twilio actually guarantees to deliver.
+        const params = msg.start?.customParameters || {};
+        if (params.mode) mode = params.mode === "negotiate" ? "negotiate" : "intake";
+        if (params.peer) peer = String(params.peer);
+        if (params.carrier) carrierHint = String(params.carrier);
+
+        console.log(
+          `[stream] start | mode=${mode} peer=${peer || "(none)"} ` +
+            `source=${params.mode ? "customParameters" : "query"}`
+        );
+
         session = startSession({
           mode,
           transport: "phone",
@@ -97,12 +132,22 @@ export function handleTwilioMedia(ws: WebSocket, req: IncomingMessage) {
             toTwilio({ event: "mark", streamSid, mark: { name: FINAL_MARK } });
             finalTimer = setTimeout(shutdown, FINAL_TIMEOUT_MS);
           },
+          // The brief landing is what earns the callback (see shutdown).
+          onEvent: (kind) => {
+            if (mode === "intake" && (kind === "mandate_captured" || kind === "intake_done")) {
+              briefCaptured = true;
+            }
+          },
         });
+
+        // They picked up as the carrier, so stop expecting them as one.
+        if (mode === "negotiate") forgetCarrier(peer);
 
         log(session.callId, "call_started", {
           transport: "phone",
           mode,
           callSid,
+          peer: peer || null,
         });
         publish({
           kind: "phone_call_started",

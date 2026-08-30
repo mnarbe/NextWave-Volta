@@ -53,6 +53,8 @@ Each folder has one owner (see [EQUIPO.md](EQUIPO.md)):
 | `src/http/ws.ts` | WS routing, dashboard socket, browser transport. | call |
 | `src/telephony/stream.ts` | Phone transport: `/twilio/media` ↔ OpenAI. | call |
 | `src/telephony/twilio.ts` | TwiML, outbound calls, number config, geo permissions. | call |
+| `src/telephony/routing.ts` | Who is on the other end of an inbound call (provider vs carrier). | call |
+| `src/telephony/handoff.ts` | What happens after a call ends — today: ring the provider back as the carrier. | call |
 | `src/agent/realtime.ts` | Bridge to OpenAI. Picks the codec per transport. | call |
 | `src/agent/prompts.ts` · `src/agent/tools.ts` | What Volta knows and can do. | call |
 | `src/domain/` | Types, mandate validation, defaults. | data |
@@ -119,16 +121,24 @@ npm run dev
 Open **http://localhost:3000** — that is the dashboard; you do not have to press
 anything.
 
-**1. Intake.** Call **+1 585 601 1456** from your phone. Volta answers,
-introduces itself and asks for the shipment and the maximum price. Once it has a
-firm number it calls `set_negotiation_mandate`, confirms the brief and **hangs up
-itself**. The mandate lands in `data/mandate.json` and in big type on the
-dashboard.
+**1. Intake.** Call **+1 585 601 1456** from your phone. Volta answers as if you
+were the provider and works through the brief: maximum price, origin,
+destination, pickup day and time window, and the container number if you have
+one. It saves what it has as it goes (`set_negotiation_mandate` reports which
+required fields are still missing), reads the brief back for confirmation, and
+**hangs up itself**. The mandate lands in `data/mandate.json` and in big type on
+the dashboard.
 
-**2. Negotiation.** In the top bar, type the carrier's number in E.164 and hit
-**Call the carrier**. Volta dials, negotiates against the cap, records every
-offer/condition/delay, and closes. Repeat per carrier: each one becomes a card
-under "Carrier negotiation".
+**2. Negotiation — automatic.** Three seconds after that call ends, **Volta rings
+you back on the same number**, this time to negotiate: you play the carrier. One
+phone covers both roles, so the whole loop demos off a single line. Volta
+negotiates against the cap, records every offer/condition/delay, and closes.
+
+If you miss the callback and dial in instead, Volta still knows you are the
+carrier and picks up the negotiation rather than starting a fresh intake.
+
+To negotiate with a *different* carrier, type their number in the top bar and hit
+**Call the carrier**. Each carrier becomes a card under "Carrier negotiation".
 
 Volta hangs up on its own when it is done: before cutting it sends a `mark` to
 Twilio and waits for it to come back, so the last sentence is never chopped.
