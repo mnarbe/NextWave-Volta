@@ -1,363 +1,195 @@
-# Volta-Negotiator — voice agent on a real phone line (Twilio + OpenAI Realtime)
+# Volta
 
-Volta answers and places **real phone calls** on **+1 585 601 1456**. It talks to
-the client in English, pins down the **maximum price in MXN**, and then **calls
-carriers** to negotiate against that cap. Everything that happens on the call
-shows up live on the web dashboard.
+> A voice agent that coordinates drayage by phone: it captures a shipper's mandate, negotiates with carriers, books the best compliant offer, and keeps an auditable record of every decision.
 
-The browser is no longer the line: it is the screen. (Microphone mode is still
-there as a fallback in case the phone fails during the demo.)
+Built for the **Nauta challenge, "The Agent on the Line,"** at NextWave Hackathon 2026.
 
-> **Working as a team?** Read [EQUIPO.md](EQUIPO.md): who owns which folder, the
-> contracts between areas, and why the phone points at one machine at a time.
+## The problem
 
----
+Much of ground transportation is still coordinated by phone. Quotes, pickup windows, changes, and exceptions live inside fast-moving conversations, leaving teams to reconcile promises from memory, notes, and follow-up calls.
 
-## How it fits together
+Volta works that phone workflow without exceeding the authority a shipper gives it. It can collect a transport brief, negotiate several carrier quotes, select an eligible offer, and respond when an already-booked carrier changes the deal. When a request falls outside the mandate, it stops and escalates instead of improvising.
 
+## What Volta does
+
+1. A shipper calls Volta and provides a transport mandate: route, pickup window, price cap, and any unacceptable conditions.
+2. Volta verifies the caller before recording the mandate.
+3. Once intake ends, it opens a negotiation round across carriers. Scripted carriers can run in parallel, while a human carrier can join by phone or from the browser.
+4. It ranks completed offers deterministically and confirms only the best offer that meets the mandate.
+5. If a carrier later changes the price, timing, or conditions, Volta checks the change against the same mandate. It accepts compliant changes and asks the shipper for approval when it lacks authority.
+6. The dashboard shows the mandate, call activity, quotes, decisions, and handover context in real time.
+
+## Demo flow
+
+The intended live demo follows a container arriving in Manzanillo that needs drayage to Guadalajara.
+
+1. Call Volta as the shipper and set a maximum price and pickup window.
+2. End the intake call. Volta launches a carrier round automatically.
+3. Join the human-carrier negotiation by phone or in Browser mode while the simulated carriers negotiate in parallel.
+4. Watch Volta compare all finished offers and book the lowest compliant one.
+5. Call back as the carrier with a delayed pickup or a higher price. Volta either resolves the change within the mandate or calls the shipper for a decision.
+
+The flow is designed for unrehearsed inputs: authority checks and carrier selection are enforced in code, not delegated to the language model.
+
+## Architecture
+
+```text
+                         public tunnel
+  shipper / carrier  ---------------------->  Twilio
+                                                   |
+                                            Media Streams
+                                                   |
+                                                   v
+  dashboard <--- WebSocket events --- Node.js / Express --- OpenAI Realtime
+       |                                     |                    |
+       |                                     |                    |
+       +--- browser microphone fallback -----+                    |
+                                                 mandates, quotes, decisions
+                                                            |
+                                                     local JSON / Firestore
 ```
-        inbound call                              outbound call
-   client ──> +1 585 601 1456              Volta ──> carrier
-                    │                                    │
-              POST /twilio/voice                  POST /call  (REST API)
-                    │  returns TwiML                      │
-                    ▼                                     ▼
-            <Connect><Stream url="wss://…/twilio/media"/>
-                             │
-                             ▼  bidirectional WebSocket, G.711 mu-law 8 kHz
-                   ┌──────────────────┐
-                   │  /twilio/media   │  audio passthrough, no transcoding
-                   └────────┬─────────┘
-                            ▼
-                 OpenAI Realtime (gpt-realtime)
-                   audio.format = "audio/pcmu"
-                            │
-                     tools + transcripts
-                            ▼
-                   bus ──> dashboard (/ws)
-```
 
-The trick that keeps this simple: the Realtime GA API speaks **G.711 mu-law
-8 kHz** (`audio/pcmu`) natively, which is exactly Twilio Media Streams' codec.
-Audio travels base64 in both directions with no resampling and no conversion.
+Twilio Media Streams and OpenAI Realtime both support G.711 mu-law audio, so phone audio crosses the bridge without transcoding. The browser is a dashboard in phone mode and a microphone fallback when a live line is unavailable.
 
-Each folder has one owner (see [EQUIPO.md](EQUIPO.md)):
+### Main components
 
-| Path | Role | Owner |
-| --- | --- | --- |
-| `src/index.ts` | Entry point: HTTP server + the two WebSockets. | everyone |
-| `src/config.ts` | Env config (OpenAI + Twilio). | everyone |
-| `src/session.ts` · `src/bus.ts` | Start a call; fan events out to dashboards. | everyone |
-| `src/http/routes.ts` | Express app + read endpoints. | everyone |
-| `src/http/telephony.ts` | Twilio webhooks + control API. | call |
-| `src/http/ws.ts` | WS routing, dashboard socket, browser transport. | call |
-| `src/telephony/stream.ts` | Phone transport: `/twilio/media` ↔ OpenAI. | call |
-| `src/telephony/twilio.ts` | TwiML, outbound calls, number config, geo permissions. | call |
-| `src/telephony/routing.ts` | Who is on the other end of an inbound call (provider vs carrier). | call |
-| `src/telephony/handoff.ts` | What happens after a call ends — today: open the round and ring the human carrier. | call |
-| `src/telephony/winner-call.ts` | Rings the winning carrier back to confirm. | call |
-| `src/negotiation/` | Roster, the parallel round, and the scripted carriers. | call |
-| `src/agent/realtime.ts` | Bridge to OpenAI. Picks the codec per transport. | call |
-| `src/agent/prompts.ts` · `src/agent/tools.ts` | What Volta knows and can do. | call |
-| `src/domain/` | Types, mandate validation, defaults. | data |
-| `src/store/` | Mandate, negotiations, call log. `paths.ts` is the only file that touches disk. | data |
-| `public/index.html` · `public/styles.css` | Dashboard structure and looks. | design |
-| `public/js/render.js` | Everything that draws. | design |
-| `public/js/client.js` · `public/js/audio.js` | WebSocket, phone controls, microphone. | call |
-| `scripts/setup-twilio.ts` | Configures Twilio without opening the console. | call |
-| `scripts/fake-twilio.mjs` | Impersonates Twilio to test without spending calls. | call |
+| Component            | Responsibility                                                                   |
+| -------------------- | -------------------------------------------------------------------------------- |
+| `src/agent/`       | Realtime voice session, prompts, tool definitions, and handover summaries.       |
+| `src/domain/`      | Mandate validation, commitment types, and deterministic carrier comparison.      |
+| `src/negotiation/` | Carrier roster, parallel rounds, simulated carriers, and escalation logic.       |
+| `src/telephony/`   | Twilio calls, Media Stream bridge, call routing, and follow-up calls.            |
+| `src/store/`       | Local persistence for mandates and negotiations, with optional Firestore export. |
+| `public/`          | Live dashboard and browser-microphone fallback.                                  |
 
----
+## Safety and authority model
 
-## The three numbers
+Volta has a narrow mandate by design.
 
-| Number | What it is | Who calls it |
-| --- | --- | --- |
-| **+1 585 601 1456** | Volta's PROVIDER line | the client, to hand over a job |
-| **+1 405 583 7265** | Volta's CARRIER line | a carrier, to reach Volta |
-| **+54 9 3454 019058** | the human carrier's phone | Volta dials this one |
+- The shipper's maximum price, pickup window, and forbidden conditions are validated by code before a carrier can win.
+- Offers outside the mandate are not silently accepted. They are rejected or sent for shipper approval.
+- Intake can require a shared caller PIN. Attempts are rate-limited and PIN digits are masked in logs.
+- Twilio webhooks validate `X-Twilio-Signature` by default.
+- Endpoints that can place calls or reconfigure Twilio are local-only unless explicitly enabled.
+- A request for a person, a complaint, a dispute, or an unclear conversation produces a handover summary with the transcript, current mandate, booking, and carrier context.
 
-The role of an inbound call is decided by the number that was dialled, so there
-is no guessing — see `src/telephony/routing.ts`. The human carrier is also
-recognised by caller ID (`src/negotiation/roster.ts`): when they ring in, Volta
-greets them by name and already knows what they quoted, so they can push a delay
-or change their price without repeating the job.
+The current prototype prepares the handover context but does not yet warm-transfer the active call to a human. That final telephony step is a planned extension, not a capability claimed by the demo.
 
-## A round: three carriers at once
+## Tech stack
 
-A round starts BY ITSELF the moment the intake call with the provider ends —
-nobody presses anything. (`POST /round/start` does the same by hand.) It
-negotiates the current mandate against every carrier on the roster at once:
+- TypeScript and Node.js
+- Express and WebSockets
+- OpenAI Realtime API for live voice conversations
+- OpenAI Chat Completions for simulated carrier negotiations
+- Twilio Voice and Media Streams for phone calls
+- Firebase Admin / Firestore for optional exports
+- Vanilla HTML, CSS, and JavaScript dashboard
 
-- the two scripted carriers negotiate immediately, as text LLM conversations
-  (`src/negotiation/`);
-- the human carrier gets a seat, and Volta rings their phone to fill it. If
-  they miss the call they can ring the carrier line instead: the seat is still
-  theirs.
+## Run locally
 
-On these calls Volta is SHOPPING, not booking: it pushes for the best price and
-tells each carrier it will call back if it goes ahead. Once everyone has quoted,
-`src/domain/compare.ts` picks the winner and `src/telephony/winner-call.ts` rings
-that carrier back with a short confirmation script — the only call where Volta
-actually commits.
+### Prerequisites
 
-Whether a quote counts is decided in code, not by the model: a price at or below
-the cap is usable, even when the model would have called it a "no deal". Leaving
-that to the prompt silently dropped good carriers from the comparison.
+- Node.js 20+
+- An OpenAI API key with access to `gpt-realtime`
+- For live phone calls: a Twilio account, a voice-enabled number, and a public HTTPS tunnel such as ngrok
 
-
-## When a booked carrier changes the deal
-
-The carrier you booked calls back: the price went up, the pickup slipped, the
-truck broke. Volta checks the new picture against the mandate the client gave
-it — in code, in `src/negotiation/escalation.ts`, never by asking the model:
-
-- **Still inside the mandate** (price under the cap, pickup in the window, no
-  forbidden condition): Volta accepts it on the call and moves on.
-- **Outside it**: Volta is not authorised. It tells the carrier it has to check
-  with the client, calls the provider, lays out what was agreed against what
-  the carrier now wants and which limit it breaks, and asks for a yes or no.
-  Their answer sends Volta back to the carrier — to confirm, or to cancel.
-
-On a call with a carrier who already holds the load, the agreed price is
-injected into the prompt and Volta is forbidden from quoting any other number.
-Without that it would cheerfully offer a booked carrier less than they had
-already shaken hands on.
-
-
-## Security
-
-**The intake call starts with a code.** Clients agree a short code with us in
-advance; Volta asks for it before it will take anything down. The demo code is
-`1234` (`PROVIDER_PIN` in `.env` — empty disables the check).
-
-Two things make this a control rather than a suggestion:
-
-- the model never judges the code. It passes what it heard to `verify_caller`
-  and is told yes or no by `src/security/pin.ts`;
-- `set_negotiation_mandate` refuses to save while a call is unverified, so
-  talking Volta past the question still cannot produce a mandate.
-
-Three tries, then a ten-minute lockout **keyed by caller number** — otherwise
-hanging up and redialling hands you a fresh three, and a four-digit code falls
-in an afternoon. Digits the caller says before they are verified are masked in
-the transcript, the dashboard and the call log, so the code is not written down
-where the call is.
-
-What this is not: a short spoken code on an unencrypted line, with caller ID as
-the only other signal. It stops a wrong number and a casual impostor. It does
-not stop someone who knows the code, and caller ID can be spoofed. A real
-deployment wants a code per client, rotated, and a callback to a number on file.
-
-
-**The control endpoints are not on the internet.** The webhooks have to be
-public and are signature-checked, but `POST /call`, `/round/start` and
-`/twilio/setup` are reachable only from the machine running Volta — the first
-of those dials any number in the world on your Twilio account. Note that ngrok
-forwards to localhost, so every tunnelled request arrives from 127.0.0.1:
-checking the source IP would have let the whole internet through. The check is
-the tunnel fingerprint (forwarding headers and the Host) instead. Set
-`ALLOW_REMOTE_CONTROL=1` to open them.
-
-**If the agent dies mid-call, the call ends.** If the OpenAI socket drops, the
-bridge tells the transport to hang up rather than leaving the caller on a silent
-line wondering what happened.
-
-**Confirmation emails are scripted, not sent.** Providers and carriers have an
-email on file (`src/negotiation/roster.ts`), and Volta tells both sides that a
-confirmation link is on its way and that nothing is final until each clicks it.
-Nothing actually leaves the building — there is no mail sending code, on
-purpose.
-
-
-## When Volta steps out
-
-Volta has narrow authority: take a brief, shop a load, ask the client about a
-change. Anything else is a person's job. `request_human_handoff` fires when
-someone asks for a human — taken at face value the first time — or on a
-complaint, a dispute, anything legal or financial beyond the booking, an upset
-caller, or a conversation Volta has lost the thread of. Handing over
-unnecessarily costs a minute; not handing over means improvising with no
-authority.
-
-Volta says a colleague is taking over and that they will already have the
-context. `src/agent/handover.ts` then makes that true: the brief, the deal on
-the table, every carrier quote and the full transcript are written to
-`data/handovers.json` and shown on the dashboard. The automatic follow-up calls
-are suppressed for that call, so Volta does not ring across whatever the person
-is doing.
-
-**What is missing is the last hop.** The call itself cannot be transferred:
-Twilio can do a warm transfer, but not while our media stream owns the call —
-it would need the call re-pointed at new TwiML, and that is not built. So the
-summary is real and the transfer is not. The module says so in its header.
-
-## Why each call is happening
-
-Every carrier call carries an INTENT, and the intent picks the script:
-
-| Intent | The call | How Volta opens |
-| --- | --- | --- |
-| `quote` | shopping the load in a round | states the job, asks their price |
-| `confirm` | they won: book it | reads the terms back, commits |
-| `change_approved` | the client said yes to their change | good news, then the final terms |
-| `change_rejected` | the client said no | says so plainly, cancels |
-| `inbound` | THEY rang us | reads the booking back, asks what they need |
-
-This used to be inferred from "do we have a booking with them?", which meant that
-from the moment a load was booked every later contact — including the call that
-books it — opened as if something had gone wrong. A carrier ringing to check an
-address got "what has changed?".
-
-The intent rides as a `<Parameter>` on the TwiML, next to the mode. Inbound calls
-default to `inbound`: they rang us, and we do not get to assume it is bad news.
-
----
-
-## One call at a time
-
-Every automatic follow-up fires off something that happens DURING a call — the
-round picks its winner while Volta is still saying goodbye to the last carrier.
-Waiting a few seconds from that moment is not the same as waiting for the line
-to be free, and Volta was ringing people who were still on the phone with it.
-`src/telephony/line.ts` tracks whether a call is up; every follow-up now waits
-for the line to clear and then pauses three seconds before dialling.
-
----
-
-## Setup
-
-**Requirements:** Node 20+, an OpenAI API key with Realtime GA (`gpt-realtime`),
-a paid Twilio account with a number, and a public tunnel to this port (ngrok),
-because Twilio has to be able to reach your machine.
+### Setup
 
 ```bash
 npm install
-cp .env.example .env    # then fill in the keys
+cp .env.example .env
 ```
 
-`.env`:
+Set at least the following values in `.env`:
 
 ```ini
 OPENAI_API_KEY=sk-...
-TWILIO_ACCOUNT_SID=AC...          # Console > Account Info
-TWILIO_AUTH_TOKEN=...             # same place
-TWILIO_NUMBER=+15856011456
+OPENAI_REALTIME_MODEL=gpt-realtime
+OPENAI_TEXT_MODEL=gpt-4o-mini
+```
+
+For phone mode, also configure:
+
+```ini
+TWILIO_ACCOUNT_SID=AC...
+TWILIO_AUTH_TOKEN=...
+TWILIO_NUMBER=+1...
 PUBLIC_URL=https://your-tunnel.ngrok-free.dev
 ```
 
-Bring up the tunnel (a reserved domain, so the URL does not change between runs):
-
-```bash
-ngrok http 3000 --url=https://your-tunnel.ngrok-free.dev
-```
-
-And point the number at this machine — this replaces editing the webhook by hand
-in the Twilio console:
-
-```bash
-npm run setup:twilio
-```
-
-The script finds the ngrok URL on its own (it reads the agent's local API and
-writes it into `.env` if missing), validates the credentials, points the number's
-`voiceUrl` at `/twilio/voice`, and warns you if the country you are about to call
-is blocked by geo permissions. Pass a destination to have it checked:
-
-```bash
-npm run setup:twilio -- +5215512345678
-```
-
----
-
-## Running it
+Start the app:
 
 ```bash
 npm run dev
 ```
 
-Open **http://localhost:3000** — that is the dashboard; you do not have to press
-anything.
+Open [http://localhost:3000](http://localhost:3000). Browser mode works without Twilio credentials, although the app still requires an OpenAI API key.
 
-**1. Intake.** Call **+1 585 601 1456** from your phone. Volta answers as if you
-were the provider and works through the brief: maximum price, origin,
-destination, pickup day and time window, and the container number if you have
-one. It saves what it has as it goes (`set_negotiation_mandate` reports which
-required fields are still missing), reads the brief back for confirmation, and
-**hangs up itself**. The mandate lands in `data/mandate.json` and in big type on
-the dashboard.
+### Configure Twilio
 
-**2. The round — automatic.** The moment that call ends, Volta opens a round
-against all three carriers at once. The two scripted ones start quoting
-immediately; three seconds later **your phone rings** and you play the human
-carrier. One phone covers both roles, so the whole loop demos off a single line.
-Volta shops each carrier against the cap and tells them it will let them know.
+Expose the local server first:
 
-**3. The decision.** Once everyone has quoted, the comparator picks the best
-clean offer and Volta calls that carrier back to confirm and book. That is the
-only call where it commits.
+```bash
+ngrok http 3000 --url=https://your-tunnel.ngrok-free.dev
+```
 
-If you miss the callback and dial in instead, Volta still knows you are the
-carrier and picks up the negotiation rather than starting a fresh intake.
+Then configure the number's webhook:
 
-To negotiate with a *different* carrier, type their number in the top bar and hit
-**Call the carrier**. Each carrier becomes a card under "Carrier negotiation".
+```bash
+npm run setup:twilio
+```
 
-Volta hangs up on its own when it is done: before cutting it sends a `mark` to
-Twilio and waits for it to come back, so the last sentence is never chopped.
+The setup script detects a running ngrok tunnel when `PUBLIC_URL` is absent, validates the Twilio configuration, and points the number at Volta's voice webhook.
 
-### Without the phone (demo fallback)
+### Useful commands
 
-The **🎙 Browser mode** button does what the old version did: this machine's
-microphone is the line. Useful if there is no signal on stage or the tunnel
-drops. Use headphones.
+| Command                  | Purpose                                                      |
+| ------------------------ | ------------------------------------------------------------ |
+| `npm run dev`          | Start the app in watch mode.                                 |
+| `npm start`            | Start the app once.                                          |
+| `npm run typecheck`    | Run TypeScript checks.                                       |
+| `npm run setup:twilio` | Configure the Twilio voice webhook.                          |
+| `npm run test:stream`  | Exercise the Media Stream path without placing a phone call. |
 
-### Testing without spending calls
+## Testing without a phone
+
+Use the dashboard's **Browser mode** to speak with Volta through the machine microphone. For a deeper transport check, run:
 
 ```bash
 npm run test:stream
 ```
 
-It impersonates Twilio against `/twilio/media` and saves what Volta says to
-`volta-greeting.wav`. If that plays, the audio path is healthy. Pass a URL to
-test through the tunnel instead of locally:
+This script acts like Twilio, connects to `/twilio/media`, and writes the generated greeting to `volta-greeting.wav`.
 
-```bash
-npm run test:stream -- wss://your-tunnel.ngrok-free.dev/twilio/media?mode=intake
-```
+## Decision log
 
----
+| Decision                                           | Why                                                                                                                     |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Validate mandates in code                          | A model can misunderstand an instruction. Price, time, and condition checks must be deterministic.                      |
+| Negotiate carriers in parallel                     | Carrier availability is the bottleneck in the real workflow. Parallel calls reduce time to a comparable decision.       |
+| Use phone audio end to end                         | The challenge is about a legacy phone process, so the primary interaction is a real call rather than a chat simulation. |
+| Preserve a browser fallback                        | A live demo should remain usable if cellular service or a public tunnel fails.                                          |
+| Store structured commitments, not only transcripts | Teams need a decision record that can be audited and acted on after the call.                                           |
+| Keep humans in the approval loop                   | Volta can negotiate only within an explicit mandate. Exceptional decisions remain with the shipper.                     |
 
-## Endpoints
+## API surface
 
-| Method | Path | What it does |
-| ------ | --------------------- | ----------------------------------------------------- |
-| POST | `/twilio/voice` | Inbound-call webhook → TwiML with the `<Stream>` |
-| POST | `/twilio/status` | Call lifecycle (logged) |
-| WSS | `/twilio/media` | mu-law audio ↔ OpenAI |
-| POST | `/call` | Volta dials: `{"to":"+52...","carrier":"..."}` |
-| POST | `/call/:sid/hangup` | Hang up a call in flight |
-| GET | `/twilio/health` | Whether the phone is ready, plus the tunnel state |
-| POST | `/twilio/setup` | Point the number at this machine |
-| GET | `/twilio/geo?to=+52…` | Whether Twilio lets you call that country |
-| GET | `/mandate` | The captured mandate |
-| GET | `/negotiations` | Carrier negotiations |
-| GET | `/calls/:id` | Full state + log of a call |
-| WSS | `/ws` | Dashboard (and microphone mode) |
+| Method   | Path               | Purpose                                                |
+| -------- | ------------------ | ------------------------------------------------------ |
+| `POST` | `/twilio/voice`  | Twilio inbound-call webhook.                           |
+| `POST` | `/twilio/status` | Twilio call lifecycle webhook.                         |
+| `WSS`  | `/twilio/media`  | Bidirectional Twilio and OpenAI audio bridge.          |
+| `POST` | `/call`          | Place an outbound carrier call. Local-only by default. |
+| `POST` | `/round/start`   | Start a carrier round. Local-only by default.          |
+| `GET`  | `/twilio/health` | Phone and tunnel readiness.                            |
+| `GET`  | `/mandate`       | Current transport mandate.                             |
+| `GET`  | `/negotiations`  | Carrier negotiation records.                           |
+| `WSS`  | `/ws`            | Dashboard and browser-mode session.                    |
 
-Webhooks verify the `X-Twilio-Signature`. To poke them with `curl`, set
-`TWILIO_VALIDATE_SIGNATURE=0`.
+## Team workflow
 
----
+For ownership conventions and contribution guidelines, see [EQUIPO.md](EQUIPO.md).
 
-## Common problems
+## Project status
 
-| Symptom | Cause / fix |
-| --- | --- |
-| "We're sorry, an application error has occurred" | Twilio could not reach the webhook (error 11200). Almost always **ngrok died**: the dashboard bar says so ("tunnel down"). Bring it back with the reserved domain: `ngrok http 3000 --url=https://YOUR-DOMAIN.ngrok-free.dev`. If the domain changed, run `npm run setup:twilio` to re-point the number. |
-| Error 21215 calling a carrier | Country blocked under Voice → Geographic Permissions. Check with `GET /twilio/geo?to=+52…`. Mexico is off by default. |
-| `invalid signature` in the log | `PUBLIC_URL` does not match the real webhook URL. |
-| Volta talks over the carrier | Raise `threshold` in `turnDetection()` in `src/agent/realtime.ts`. |
-| It cuts you off on a short pause | Raise `silence_duration_ms` in the same place. |
-| The last sentence gets chopped | The `mark` never came back: check the `/twilio/media` log. |
-| `beta_api_shape_disabled` | Your account does not have Realtime GA. Use `gpt-realtime`. |
+This is a hackathon prototype built to demonstrate a real-time, mandate-bound voice workflow. It is not production-ready. In particular, production deployment would need per-customer authentication, durable operational storage, observability, consent and recording policies, and a completed live-call transfer flow.
