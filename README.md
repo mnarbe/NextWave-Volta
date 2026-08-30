@@ -124,6 +124,37 @@ injected into the prompt and Volta is forbidden from quoting any other number.
 Without that it would cheerfully offer a booked carrier less than they had
 already shaken hands on.
 
+
+## Security
+
+**The intake call starts with a code.** Clients agree a short code with us in
+advance; Volta asks for it before it will take anything down. The demo code is
+`1234` (`PROVIDER_PIN` in `.env` — empty disables the check).
+
+Two things make this a control rather than a suggestion:
+
+- the model never judges the code. It passes what it heard to `verify_caller`
+  and is told yes or no by `src/security/pin.ts`;
+- `set_negotiation_mandate` refuses to save while a call is unverified, so
+  talking Volta past the question still cannot produce a mandate.
+
+Three tries, then a ten-minute lockout **keyed by caller number** — otherwise
+hanging up and redialling hands you a fresh three, and a four-digit code falls
+in an afternoon. Digits the caller says before they are verified are masked in
+the transcript, the dashboard and the call log, so the code is not written down
+where the call is.
+
+What this is not: a short spoken code on an unencrypted line, with caller ID as
+the only other signal. It stops a wrong number and a casual impostor. It does
+not stop someone who knows the code, and caller ID can be spoofed. A real
+deployment wants a code per client, rotated, and a callback to a number on file.
+
+**Confirmation emails are scripted, not sent.** Providers and carriers have an
+email on file (`src/negotiation/roster.ts`), and Volta tells both sides that a
+confirmation link is on its way and that nothing is final until each clicks it.
+Nothing actually leaves the building — there is no mail sending code, on
+purpose.
+
 ---
 
 ## Setup

@@ -24,6 +24,7 @@ export const DEMO_ROSTER: CarrierSpec[] = [
     id: "sim-norte",
     name: "Fletes del Norte",
     kind: "sim",
+    email: "despacho@fletesdelnorte.mx",
     persona: {
       askPriceMxn: 9600,
       floorPriceMxn: 7400,
@@ -36,6 +37,7 @@ export const DEMO_ROSTER: CarrierSpec[] = [
     id: "sim-pacifico",
     name: "Transportes del Pacifico",
     kind: "sim",
+    email: "operaciones@tpacifico.mx",
     persona: {
       askPriceMxn: 11200,
       floorPriceMxn: 8600,
@@ -48,6 +50,7 @@ export const DEMO_ROSTER: CarrierSpec[] = [
     id: "human-1",
     name: "Transportes Uribe",
     kind: "human",
+    email: "dispatch@transportesuribe.mx",
     // The phone Volta dials for this carrier, and the caller ID it recognises
     // them by when they ring in. Override with DEMO_CARRIER_NUMBER in .env.
     phone: config.demoCarrierNumber || "+5493454019058",
@@ -87,4 +90,10 @@ export function loadRoster(override?: unknown): CarrierSpec[] {
 
   // 3) built-in demo roster
   return DEMO_ROSTER;
+}
+
+// Look a carrier up by the id stamped on its negotiation record.
+export function findCarrierById(id: string | undefined): CarrierSpec | undefined {
+  if (!id) return undefined;
+  return loadRoster().find((c) => c.id === id);
 }

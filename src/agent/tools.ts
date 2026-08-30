@@ -15,6 +15,7 @@ import {
   resetNegotiations,
 } from "../store/negotiations.js";
 import { evaluateChange, resolveChange } from "../negotiation/escalation.js";
+import { checkPin, isVerified } from "../security/pin.js";
 import type { NegotiationMandate, Proposal } from "../domain/types.js";
 
 function num(v: unknown): number | undefined {
@@ -34,6 +35,15 @@ function missingMandateFields(m: NegotiationMandate): string[] {
   return missing;
 }
 
+// The number this call came from, for the PIN lockout counter. The phone
+// transport stamps it on the call_started log entry; without it (browser mode)
+// the lockout falls back to being per-call.
+function callerNumber(callId: string): string | undefined {
+  const started = getCall(callId)?.log.find((e) => e.kind === "call_started");
+  const peer = (started?.data as any)?.peer;
+  return typeof peer === "string" && peer ? peer : undefined;
+}
+
 function strArray(v: unknown): string[] {
   return Array.isArray(v) ? v.map((x) => String(x)).filter(Boolean) : [];
 }
@@ -42,6 +52,25 @@ function strArray(v: unknown): string[] {
 // PHASE 0 — INTAKE tools (talking to the client).
 // ---------------------------------------------------------------------------
 export const intakeToolDefinitions = [
+  {
+    type: "function",
+    name: "verify_caller",
+    description:
+      "Check the security code the caller reads out. Call this with EXACTLY what " +
+      "you heard, digits or words — do not judge whether it is right, that is not " +
+      "your call. The result tells you whether they are through and how many " +
+      "tries they have left. You cannot save a brief until this returns verified.",
+    parameters: {
+      type: "object",
+      properties: {
+        code: {
+          type: "string",
+          description: "What the caller said, e.g. \"1234\" or \"one two three four\".",
+        },
+      },
+      required: ["code"],
+    },
+  },
   {
     type: "function",
     name: "set_negotiation_mandate",
@@ -362,7 +391,49 @@ export async function runTool(
 
   switch (name) {
     // --- PHASE 0: intake with the client ----------------------------------
+    case "verify_caller": {
+      const check = checkPin({
+        callId,
+        caller: callerNumber(callId),
+        entered: String(args.code ?? ""),
+      });
+      // Never log what they said — it is the code, or close to it.
+      log(callId, "tool_result", {
+        name: "verify_caller",
+        result: { ok: check.ok, attemptsLeft: check.attemptsLeft, lockedOut: check.lockedOut },
+      });
+      result = {
+        verified: check.ok,
+        attemptsLeft: check.attemptsLeft,
+        lockedOut: check.lockedOut,
+        instruction: check.ok
+          ? "Verified. Thank them briefly and go straight into taking the brief."
+          : check.lockedOut
+            ? "They are out of tries. Do NOT tell them the code or how close they " +
+              "were. Say you cannot verify them and cannot take the job over this " +
+              "call, suggest they contact their account manager, say goodbye and " +
+              "call end_intake."
+            : `Not a match. Ask them to read it again, digit by digit. Do NOT say ` +
+              `what the code is, do NOT say how close they were, and do NOT hint. ` +
+              `They have ${check.attemptsLeft} ${check.attemptsLeft === 1 ? "try" : "tries"} left.`,
+      };
+      break;
+    }
+
     case "set_negotiation_mandate": {
+      // The gate that actually holds. The prompt asks Volta to verify first, but
+      // a prompt is a request; this is the rule. An unverified caller cannot
+      // leave a mandate behind, however the conversation went.
+      if (!isVerified(callId)) {
+        result = {
+          saved: false,
+          error: "caller_not_verified",
+          instruction:
+            "You have not verified this caller yet. Ask them for their security " +
+            "code and call verify_caller before taking anything down.",
+        };
+        break;
+      }
       const max = Number(args.maxPriceMxn);
       if (!Number.isFinite(max) || max <= 0) {
         result = { saved: false, error: "maxPriceMxn must be a positive number of MXN." };

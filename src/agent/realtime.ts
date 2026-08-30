@@ -25,6 +25,8 @@ import {
 import { DEFAULT_MANDATE } from "../domain/defaults.js";
 import { getNegotiation, lastQuoteFor } from "../store/negotiations.js";
 import { currentBooking, isBookedCarrier, pendingChange } from "../negotiation/escalation.js";
+import { findCarrierById } from "../negotiation/roster.js";
+import { redactWhileUnverified, forgetCall } from "../security/pin.js";
 
 // "intake" = Volta talks to the CLIENT to capture the mandate.
 // "negotiate" = Volta negotiates with a carrier.
@@ -68,6 +70,11 @@ export class RealtimeBridge {
   // Volta already called end_intake / end_negotiation: hang up as soon as it
   // stops talking (not in the middle of the closing line).
   private pendingFinal = false;
+  // Did the model actually SAY anything in the response now in flight? If it
+  // calls end_* without having spoken, hanging up would cut the call dead —
+  // so we ask it for one last line first.
+  private spokeThisResponse = false;
+  private closingLineRequested = false;
   private finalFired = false;
 
   constructor(callId: string, cb: Callbacks, opts: BridgeOptions = {}) {
@@ -188,6 +195,7 @@ export class RealtimeBridge {
       ? buildIntakeInstructions()
       : buildInstructions(call.mandate ?? DEFAULT_MANDATE, {
           carrierName: neg?.carrierName || booking?.carrierName || undefined,
+          carrierEmail: findCarrierById(neg?.carrierId)?.email,
           collectingQuotes: Boolean(neg?.roundId) && !this.confirming,
           confirming: this.confirming,
           standingOffer: previous,
@@ -275,17 +283,52 @@ export class RealtimeBridge {
       // Track response start/end so we know whether we can cancel it.
       case "response.created":
         this.responseActive = true;
+        this.spokeThisResponse = false;
         break;
 
-      case "response.done":
+      case "response.done": {
+        const spoke = this.spokeThisResponse;
         this.responseActive = false;
-        // If Volta already asked to close, this was the closing line's audio.
-        if (this.pendingFinal) this.fireFinal();
+        if (!this.pendingFinal) break;
+
+        // Volta asked to close. If it did so without saying anything on this
+        // turn, hanging up now would drop the line mid-conversation — the
+        // "Volta cut me off" complaint. Give it exactly one turn to say
+        // goodbye, then hang up whatever it does.
+        if (!spoke && !this.closingLineRequested) {
+          this.closingLineRequested = true;
+          log(this.callId, "tool_result", {
+            name: "closing",
+            note: "end_* called with nothing spoken — asking for a goodbye first",
+          });
+          this.send({
+            type: "response.create",
+            response: {
+              // Deliberately narrow. These instructions REPLACE the session
+              // ones for this response, so the model has no brief in front of
+              // it — which is fine for a goodbye, and exactly why it must not
+              // reach for any figure here.
+              instructions:
+                "Close the call now. Say a brief, warm goodbye in one or two " +
+                "sentences: thank them by name if you know it and say what " +
+                "happens next, in the words you already used. Do NOT introduce " +
+                "a new topic, do NOT state any price, date or number, and do " +
+                "NOT call any tool.",
+            },
+          });
+          break;
+        }
+
+        this.fireFinal();
         break;
+      }
 
       // GA API: response.audio.delta -> response.output_audio.delta
       case "response.output_audio.delta":
-        if (evt.delta) this.cb.sendAudio(evt.delta);
+        if (evt.delta) {
+          this.spokeThisResponse = true;
+          this.cb.sendAudio(evt.delta);
+        }
         break;
 
       // Barge-in: the person started talking. We always flush the transport's
@@ -301,10 +344,15 @@ export class RealtimeBridge {
         }
         break;
 
-      case "conversation.item.input_audio_transcription.completed":
-        log(this.callId, "user_transcript", evt.transcript);
-        this.cb.onEvent("user_transcript", evt.transcript);
+      case "conversation.item.input_audio_transcription.completed": {
+        // Until the caller is verified, whatever they say is very likely their
+        // security code — mask digits so it does not land in the transcript,
+        // the dashboard or the call log.
+        const said = redactWhileUnverified(this.callId, evt.transcript);
+        log(this.callId, "user_transcript", said);
+        this.cb.onEvent("user_transcript", said);
         break;
+      }
 
       // GA API: response.audio_transcript.done -> response.output_audio_transcript.done
       case "response.output_audio_transcript.done":
@@ -423,8 +471,24 @@ export class RealtimeBridge {
       log(this.callId, kind, result);
       this.cb.onEvent(kind, result);
       this.pendingFinal = true;
-      // If the model already stopped talking, close now; otherwise on response.done.
-      if (!this.responseActive) this.fireFinal();
+      // If a response is still in flight, response.done decides: it hangs up if
+      // Volta spoke, and asks for a goodbye first if it did not. With nothing in
+      // flight there is no audio coming, so ask for the goodbye here.
+      if (!this.responseActive && !this.closingLineRequested) {
+        this.closingLineRequested = true;
+        this.send({
+          type: "response.create",
+          response: {
+            instructions:
+              "Close the call now. Say a brief, warm goodbye in one or two " +
+              "sentences: thank them by name if you know it and say what happens " +
+              "next, in the words you already used. Do NOT introduce a new topic, " +
+              "do NOT state any price, date or number, and do NOT call any tool.",
+          },
+        });
+      } else if (!this.responseActive) {
+        this.fireFinal();
+      }
       return;
     }
 
@@ -436,6 +500,8 @@ export class RealtimeBridge {
   }
 
   public close() {
+    // A verified call is verified only while it lasts.
+    forgetCall(this.callId);
     try {
       this.ws.close();
     } catch {

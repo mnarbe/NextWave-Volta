@@ -148,6 +148,10 @@ export type CarrierSpec = {
   // and the number it recognises them by when they call in. Without it Volta
   // can still talk to them, it just cannot tell WHICH carrier is on the line.
   phone?: string;
+  // Where the confirmation link is sent once the contract is settled. Nothing
+  // is actually sent yet: Volta tells people it is coming and names the address
+  // on file. The sending leg is deliberately not built.
+  email?: string;
   persona?: SimPersona;
 };
 

@@ -68,9 +68,18 @@ export const config = {
   // The client's phone, for when Volta has to call THEM back about a change a
   // carrier made. In the demo it is the same handset as the carrier.
   providerNumber: process.env.DEMO_PROVIDER_NUMBER || "",
+
+  // Shared code the client reads out on the intake call. See security/pin.ts.
+  providerPin: (process.env.PROVIDER_PIN ?? "").replace(/\D/g, ""),
 };
 
 // Can we use the phone? We need credentials, a number and a public URL.
+// The code the client agreed with us, asked for on the intake call before
+// Volta will take anything down. Empty disables the check — the server says so
+// loudly at boot, because silently accepting anyone is not a default worth
+// having by accident.
+export const PROVIDER_PIN = process.env.PROVIDER_PIN ?? "";
+
 export function twilioReady(): boolean {
   const t = config.twilio;
   return Boolean(t.accountSid && t.authToken && t.number && config.publicUrl);
