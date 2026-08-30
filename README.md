@@ -16,8 +16,9 @@ Volta works that phone workflow without exceeding the authority a shipper gives 
 2. Volta verifies the caller before recording the mandate.
 3. Once intake ends, it opens a negotiation round across carriers. Scripted carriers can run in parallel, while a human carrier can join by phone or from the browser.
 4. It ranks completed offers deterministically and confirms only the best offer that meets the mandate.
-5. If a carrier later changes the price, timing, or conditions, Volta checks the change against the same mandate. It accepts compliant changes and asks the shipper for approval when it lacks authority.
-6. The dashboard shows the mandate, call activity, quotes, decisions, and handover context in real time.
+5. When a deal closes, it emails a written recap to both sides. A commitment counts only once that recap is out, and the booking is final only after both parties click their confirmation link.
+6. If a carrier later changes the price, timing, or conditions, Volta checks the change against the same mandate. It accepts compliant changes and asks the shipper for approval when it lacks authority.
+7. The dashboard shows the mandate, call activity, quotes, decisions, and handover context in real time.
 
 ## Demo flow
 
@@ -34,22 +35,31 @@ The flow is designed for unrehearsed inputs: authority checks and carrier select
 ## Architecture
 
 ```text
-                         public tunnel
-  shipper / carrier  ---------------------->  Twilio
-                                                   |
-                                            Media Streams
-                                                   |
-                                                   v
-  dashboard <--- WebSocket events --- Node.js / Express --- OpenAI Realtime
-       |                                     |                    |
-       |                                     |                    |
-       +--- browser microphone fallback -----+                    |
-                                                 mandates, quotes, decisions
-                                                            |
-                                                     local JSON / Firestore
+                          public tunnel
+   shipper / carrier  -------------------->  Twilio
+                                                |
+                                          Media Streams
+                                                |
+                                                v
+   dashboard  <-- WebSocket events --  Node.js / Express  -->  OpenAI Realtime
+        |                               |      |                 (live voice)
+        +-- browser mic fallback -------+      |
+                                               +-->  OpenAI Chat Completions
+                                               |       (simulated carriers)
+                     +-------------------------+---------------------+
+                     v                                               v
+         local JSON / Firestore                                    Resend
+      mandates - quotes - decisions                                   |
+             commitments                          recap to both sides, each
+                     ^                            carrying a signed link
+                     |                                                |
+                     +--- GET /confirm/:id/:party  <------------------+
+                          (records one side; both make it final)
 ```
 
 Twilio Media Streams and OpenAI Realtime both support G.711 mu-law audio, so phone audio crosses the bridge without transcoding. The browser is a dashboard in phone mode and a microphone fallback when a live line is unavailable.
+
+The email leg is a loop rather than a send-and-forget. Closing a deal sends the recap, which is what makes the commitment count; each side's link comes back in through `/confirm` and only both together make the booking final.
 
 ### Main components
 
@@ -59,6 +69,7 @@ Twilio Media Streams and OpenAI Realtime both support G.711 mu-law audio, so pho
 | `src/domain/`      | Mandate validation, commitment types, and deterministic carrier comparison.      |
 | `src/negotiation/` | Carrier roster, parallel rounds, simulated carriers, and escalation logic.       |
 | `src/telephony/`   | Twilio calls, Media Stream bridge, call routing, and follow-up calls.            |
+| `src/email/`       | Recap emails through Resend, and the signed links that confirm a booking.        |
 | `src/store/`       | Local persistence for mandates and negotiations, with optional Firestore export. |
 | `public/`          | Live dashboard and browser-microphone fallback.                                  |
 
@@ -69,8 +80,9 @@ Volta has a narrow mandate by design.
 - The shipper's maximum price, pickup window, and forbidden conditions are validated by code before a carrier can win.
 - Offers outside the mandate are not silently accepted. They are rejected or sent for shipper approval.
 - Intake can require a shared caller PIN. Attempts are rate-limited and PIN digits are masked in logs.
+- A commitment is not a transcript line. It clears two separate bars: it *counts* once the written recap has actually been sent, and is *final* only once both sides confirm. The state is derived from the data, never stored, so the two rules cannot drift apart. If the recap fails to send, Volta is told and must not claim it went out.
 - Twilio webhooks validate `X-Twilio-Signature` by default.
-- Endpoints that can place calls or reconfigure Twilio are local-only unless explicitly enabled.
+- Endpoints that can place calls or reconfigure Twilio are local-only unless explicitly enabled. "Local" means no forwarding headers and a loopback `Host`, which is what keeps the public tunnel out; the source address may be a private one so the dashboard still works from a container.
 - A request for a person, a complaint, a dispute, or an unclear conversation produces a handover summary with the transcript, current mandate, booking, and carrier context.
 
 The current prototype prepares the handover context but does not yet warm-transfer the active call to a human. That final telephony step is a planned extension, not a capability claimed by the demo.
@@ -82,6 +94,7 @@ The current prototype prepares the handover context but does not yet warm-transf
 - OpenAI Realtime API for live voice conversations
 - OpenAI Chat Completions for simulated carrier negotiations
 - Twilio Voice and Media Streams for phone calls
+- Resend for recap and booking-confirmation emails
 - Firebase Admin / Firestore for optional exports
 - Vanilla HTML, CSS, and JavaScript dashboard
 
@@ -149,6 +162,17 @@ OPENAI_REALTIME_MODEL=gpt-realtime
 OPENAI_TEXT_MODEL=gpt-4o-mini
 ```
 
+For recap emails, also configure (the sender must be on a domain you verified in Resend):
+
+```ini
+RESEND_API_KEY=re_...
+RESEND_FROM=Volta <volta@yourdomain.com>
+RECAP_EMAIL=you@yourdomain.com
+CONFIRM_SECRET=any-stable-string
+```
+
+Set `CONFIRM_SECRET`. Without it a new one is generated on every boot, and links from an email sent before a restart stop working.
+
 For phone mode, also configure:
 
 ```ini
@@ -191,6 +215,9 @@ The setup script detects a running ngrok tunnel when `PUBLIC_URL` is absent, val
 | `npm run typecheck`    | Run TypeScript checks.                                       |
 | `npm run setup:twilio` | Configure the Twilio voice webhook.                          |
 | `npm run test:stream`  | Exercise the Media Stream path without placing a phone call. |
+| `npm run check:email`  | Send a real recap to `RECAP_EMAIL` to see how it arrives.    |
+| `npm run test:email`   | Recap links, confirmation states, and the failed-send path.  |
+| `npm run test:guard`   | Local-only rules: what reaches the control endpoints.        |
 
 ## Testing without a phone
 
@@ -212,6 +239,10 @@ This script acts like Twilio, connects to `/twilio/media`, and writes the genera
 | Preserve a browser fallback                        | A live demo should remain usable if cellular service or a public tunnel fails.                                          |
 | Store structured commitments, not only transcripts | Teams need a decision record that can be audited and acted on after the call.                                           |
 | Keep humans in the approval loop                   | Volta can negotiate only within an explicit mandate. Exceptional decisions remain with the shipper.                     |
+| Gate a commitment on the recap being sent          | Volta tells carriers on the call that a confirmation is coming. Sending it from the same tool that records the commitment is what makes that true rather than a claim.                     |
+| Sign confirmation links instead of storing tokens  | `GET /calls/:id` returns a commitment whole, so a stored token would leak with it. An HMAC of commitment and party cannot be forged and keeps nothing secret in the record.                     |
+| Ship a Dockerfile rather than a deployment         | The project has no build step and one required variable, so an image is install-and-run. Deploying would have changed the public transport days before the demo without helping telephony, which needs a tunnel either way.                     |
+| Widen local-only to private addresses              | In Docker the dashboard reaches the container from the bridge gateway, so a loopback-only rule answered 403 to the very case the image exists for. The tunnel is still blocked by its fingerprint: forwarding headers and a public `Host`.                     |
 
 ## API surface
 
@@ -223,6 +254,9 @@ This script acts like Twilio, connects to `/twilio/media`, and writes the genera
 | `POST` | `/call`          | Place an outbound carrier call. Local-only by default. |
 | `POST` | `/round/start`   | Start a carrier round. Local-only by default.          |
 | `GET`  | `/twilio/health` | Phone and tunnel readiness.                            |
+| `GET`  | `/confirm/:commitmentId/:party` | Signed link from a recap email. Records one side's confirmation. |
+| `GET`  | `/round`         | Current round: negotiations and the comparator's decision. |
+| `GET`  | `/calls/:id`     | One call's state and event log.                        |
 | `GET`  | `/mandate`       | Current transport mandate.                             |
 | `GET`  | `/negotiations`  | Carrier negotiation records.                           |
 | `WSS`  | `/ws`            | Dashboard and browser-mode session.                    |
@@ -233,4 +267,13 @@ For ownership conventions and contribution guidelines, see [EQUIPO.md](EQUIPO.md
 
 ## Project status
 
-This is a hackathon prototype built to demonstrate a real-time, mandate-bound voice workflow. It is not production-ready. In particular, production deployment would need per-customer authentication, durable operational storage, observability, consent and recording policies, and a completed live-call transfer flow.
+This is a hackathon prototype built to demonstrate a real-time, mandate-bound voice workflow. It is not production-ready.
+
+Known gaps, stated plainly:
+
+- **Calls are not recorded**, so a commitment cannot yet cite the audio timestamp of the moment it was agreed. This is the one gap that cannot be filled retroactively: audio not captured during a call is gone.
+- **The live call is not warm-transferred.** A handover writes the full context to the dashboard, and Volta says a person will pick it up with that context, which is true. Putting the person on the line is the missing last hop.
+- **Prompt rules are not controls.** During a quote round Volta is told not to commit, and has been observed doing it anyway. Rules that must hold are enforced in code; the rest are guidance and can be broken.
+- Round outcomes vary between runs, since the carriers negotiate for real. The winner and the winning price are not scripted.
+
+Production deployment would also need per-customer authentication, durable operational storage, observability, and consent and recording policies.
