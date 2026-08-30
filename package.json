@@ -9,7 +9,9 @@
     "start": "tsx src/index.ts",
     "setup:twilio": "tsx scripts/setup-twilio.ts",
     "test:stream": "node scripts/fake-twilio.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check:email": "tsx scripts/check-email.ts",
+    "test:email": "tsx src/email/_recap.test.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

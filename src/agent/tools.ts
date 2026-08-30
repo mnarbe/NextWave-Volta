@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import { getCall, log } from "../store/calls.js";
 import { checkMandate, computeDelayDays } from "../domain/mandate.js";
+import { sendRecap } from "../email/recap.js";
 import { saveMandate } from "../store/mandates.js";
 import {
   recordOffer,
@@ -17,7 +18,8 @@ import {
 import { evaluateChange, resolveChange } from "../negotiation/escalation.js";
 import { checkPin, isVerified } from "../security/pin.js";
 import { requestHandover } from "./handover.js";
-import type { NegotiationMandate, Proposal } from "../domain/types.js";
+import { commitmentState } from "../domain/types.js";
+import type { Commitment, NegotiationMandate, Proposal } from "../domain/types.js";
 
 function num(v: unknown): number | undefined {
   const n = Number(v);
@@ -692,7 +694,7 @@ export async function runTool(
         result = { committed: false, decision: check.decision, reasons: check.reasons };
         break;
       }
-      const commitment = {
+      const commitment: Commitment = {
         id: randomUUID(),
         callId,
         priceMxn: proposal.priceMxn,
@@ -700,6 +702,7 @@ export async function runTool(
         conditions: proposal.conditions || [],
         agreedByName: args.agreedByName,
         createdAt: new Date().toISOString(),
+        confirmations: [],
       };
       call.commitments.push(commitment);
       // Mirror the commitment into the negotiation record (dashboard).
@@ -711,8 +714,25 @@ export async function runTool(
         conditions: commitment.conditions,
         note: "commitment validated by check_mandate",
       });
-      // TODO (Phase 2): send_recap + audio timestamp before counting as verified.
-      result = { committed: true, commitmentId: commitment.id };
+      // The written recap is what makes this count. Volta already told them on
+      // the call that it is coming, so we send it here and report what actually
+      // happened — never assume it went out.
+      commitment.recap = await sendRecap(commitment, call.mandate);
+      const state = commitmentState(commitment);
+
+      if (commitment.recap.status !== "sent") {
+        log(callId, "tool_result", { name: "recap_failed", error: commitment.recap.error });
+      }
+
+      result = {
+        committed: true,
+        commitmentId: commitment.id,
+        state,
+        // The model reads this: on a failed recap it must NOT tell them the
+        // confirmation is on its way, because it is not.
+        recapSent: commitment.recap.status === "sent",
+        recapError: commitment.recap.error,
+      };
       break;
     }
 

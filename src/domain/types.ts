@@ -45,6 +45,21 @@ export type MandateCheck = {
   reasons: string[];
 };
 
+// The written recap that makes a commitment count. Both sides must receive it:
+// a recap that only reached one of them is not what Volta described on the call.
+export type CommitmentRecap = {
+  status: "sent" | "failed";
+  sentAt: string;
+  messageIds: string[]; // Resend ids, one per side
+  to: string[];
+  error?: string;
+};
+
+export type CommitmentConfirmation = {
+  party: "client" | "carrier";
+  at: string;
+};
+
 export type Commitment = {
   id: string;
   callId: string;
@@ -53,8 +68,22 @@ export type Commitment = {
   conditions: string[];
   agreedByName?: string;
   createdAt: string;
-  // TODO (Phase 2): recapMessageId, agreedAtAudioMs, verified status.
+  // A commitment COUNTS once the recap is out...
+  recap?: CommitmentRecap;
+  // ...and is FINAL once both sides have clicked their link.
+  confirmations: CommitmentConfirmation[];
+  // TODO (Phase 2): agreedAtAudioMs — needs call audio, which is not recorded yet.
 };
+
+// Where a commitment stands, derived rather than stored so the two rules above
+// can never drift out of sync with the data.
+export function commitmentState(
+  c: Commitment
+): "pending_recap" | "recorded" | "confirmed" {
+  if (c.recap?.status !== "sent") return "pending_recap";
+  const parties = new Set(c.confirmations.map((x) => x.party));
+  return parties.has("client") && parties.has("carrier") ? "confirmed" : "recorded";
+}
 
 export type LogEntry = {
   ts: string;

@@ -467,6 +467,12 @@ CLOSING CHECK — do this right before EVERY end_negotiation
   date/time, any conditions, and the name of who you spoke to — and ask them to
   confirm it's correct. Once they say yes, call propose_commitment, then
   end_negotiation with outcome "deal".
+- ORDER MATTERS on a deal: call propose_commitment BEFORE you promise the
+  confirmation email, because that tool is what sends it. It comes back with
+  recapSent. If recapSent is true, say the mail is on its way to both of you.
+  If it is FALSE, do not say it went out — tell them you will confirm the
+  details with them separately, and close normally. Promising a mail that was
+  never sent is worse than not mentioning one.
 - On no deal: in one sentence, say you couldn't close today and why (price over
   budget), thank them, then call end_negotiation with outcome "no_deal".
 - EITHER WAY, pass end_negotiation the final picture: finalPriceMxn,

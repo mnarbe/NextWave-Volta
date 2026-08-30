@@ -3,7 +3,7 @@
 // In-memory state + console logging. Same as the phone version.
 // -----------------------------------------------------------------------------
 import { randomUUID } from "node:crypto";
-import type { CallState, Mandate, LogEntry } from "../domain/types.js";
+import type { CallState, Commitment, Mandate, LogEntry } from "../domain/types.js";
 
 const calls = new Map<string, CallState>();
 
@@ -19,6 +19,19 @@ export function createCall(mandate: Mandate | null = null, id?: string): string 
 
 export function getCall(callId: string): CallState | undefined {
   return calls.get(callId);
+}
+
+// Commitments live inside their call. The confirmation links arrive knowing only
+// the commitment id, so we scan — there are a handful of calls in a demo, and
+// keeping a second index in sync would be more to get wrong than it saves.
+export function findCommitment(
+  commitmentId: string
+): { call: CallState; commitment: Commitment } | undefined {
+  for (const call of calls.values()) {
+    const commitment = call.commitments.find((c) => c.id === commitmentId);
+    if (commitment) return { call, commitment };
+  }
+  return undefined;
 }
 
 export function log(callId: string, kind: LogEntry["kind"], data: unknown): void {
