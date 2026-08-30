@@ -24,7 +24,12 @@ import {
 } from "./tools.js";
 import { DEFAULT_MANDATE } from "../domain/defaults.js";
 import { getNegotiation, lastQuoteFor } from "../store/negotiations.js";
-import { currentBooking, isBookedCarrier, pendingChange } from "../negotiation/escalation.js";
+import {
+  currentBooking,
+  isBookedCarrier,
+  pendingChange,
+  lastResolvedChange,
+} from "../negotiation/escalation.js";
 import { findCarrierById } from "../negotiation/roster.js";
 import { redactWhileUnverified, forgetCall } from "../security/pin.js";
 
@@ -142,6 +147,30 @@ export class RealtimeBridge {
         };
   }
 
+  // The exact figures a "read the terms back" call is about. Never guessed: if
+  // we do not have them, the prompt says "(not recorded)" and Volta says it
+  // will confirm that detail by email.
+  private termsForThisCall() {
+    if (this.intent === "confirm") {
+      const b = currentBooking();
+      return b
+        ? { priceMxn: b.priceMxn, pickupTime: b.pickupTime, conditions: b.conditions }
+        : undefined;
+    }
+    if (this.intent === "change_approved") {
+      const c = lastResolvedChange();
+      if (!c) return undefined;
+      // The approved picture: whatever they asked to change, plus whatever they
+      // did not touch. The client said yes to THIS, not to the old price.
+      return {
+        priceMxn: c.requested.priceMxn ?? c.agreed.priceMxn,
+        pickupTime: c.requested.pickupTime ?? c.agreed.pickupTime,
+        conditions: c.requested.conditions?.length ? c.requested.conditions : c.agreed.conditions,
+      };
+    }
+    return undefined;
+  }
+
   private onOpen() {
     const call = getCall(this.callId);
     if (!call) return;
@@ -211,6 +240,7 @@ export class RealtimeBridge {
           carrierName: neg?.carrierName || booking?.carrierName || undefined,
           carrierEmail: findCarrierById(neg?.carrierId)?.email,
           intent: this.intent,
+          terms: this.termsForThisCall(),
           collectingQuotes: Boolean(neg?.roundId) && this.intent === "quote",
           standingOffer: previous,
           booking: booking
@@ -269,7 +299,8 @@ export class RealtimeBridge {
 
     // Volta opens the conversation.
     //
-    // NOTE: do NOT pass response.instructions here. In the Realtime API those
+    // NOTE: do NOT pass response.instructions here — and if you ever must,
+    // repeat EVERY standing rule inside them (language, numbers, tone). In the Realtime API those
     // REPLACE the session instructions for that response, so the opening line
     // would be generated without the mandate — and the model then invents a
     // shipment ("a load from Monterrey to Queretaro") or asks the carrier for
@@ -321,9 +352,11 @@ export class RealtimeBridge {
               // Deliberately narrow. These instructions REPLACE the session
               // ones for this response, so the model has no brief in front of
               // it — which is fine for a goodbye, and exactly why it must not
-              // reach for any figure here.
+              // reach for any figure here, and why "Speak ENGLISH" has to be
+              // repeated: it once closed a call in Spanish because the session
+              // language rule was not in scope for this response.
               instructions:
-                "Close the call now. Say a brief, warm goodbye in one or two " +
+                "Speak ENGLISH. Close the call now. Say a brief, warm goodbye in one or two " +
                 "sentences: thank them by name if you know it and say what " +
                 "happens next, in the words you already used. Do NOT introduce " +
                 "a new topic, do NOT state any price, date or number, and do " +
@@ -501,7 +534,7 @@ export class RealtimeBridge {
           type: "response.create",
           response: {
             instructions:
-              "Close the call now. Say a brief, warm goodbye in one or two " +
+              "Speak ENGLISH. Close the call now. Say a brief, warm goodbye in one or two " +
               "sentences: thank them by name if you know it and say what happens " +
               "next, in the words you already used. Do NOT introduce a new topic, " +
               "do NOT state any price, date or number, and do NOT call any tool.",
