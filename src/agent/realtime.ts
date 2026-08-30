@@ -15,11 +15,13 @@ import {
   buildInstructions,
   buildIntakeInstructions,
   buildEscalationInstructions,
+  buildClientReportInstructions,
 } from "./prompts.js";
 import {
   toolDefinitions,
   intakeToolDefinitions,
   escalationToolDefinitions,
+  clientReportToolDefinitions,
   runTool,
 } from "./tools.js";
 import { DEFAULT_MANDATE } from "../domain/defaults.js";
@@ -32,10 +34,11 @@ import {
 } from "../negotiation/escalation.js";
 import { findCarrierById } from "../negotiation/roster.js";
 import { redactWhileUnverified, forgetCall } from "../security/pin.js";
+import { currentClientCarrierReport } from "../intelligence/client-report.js";
 
 // "intake" = Volta talks to the CLIENT to capture the mandate.
 // "negotiate" = Volta negotiates with a carrier.
-export type Phase = "intake" | "negotiate" | "escalate";
+export type Phase = "intake" | "negotiate" | "escalate" | "report";
 
 // How the audio reaches the person.
 export type Transport = "browser" | "phone";
@@ -53,6 +56,7 @@ export type CallIntent =
   | "confirm"
   | "change_approved"
   | "change_rejected"
+  | "client_report"
   | "inbound";
 
 type Callbacks = {
@@ -187,6 +191,24 @@ export class RealtimeBridge {
 
     const isIntake = this.phase === "intake";
     const isEscalation = this.phase === "escalate";
+    const isClientReport = this.phase === "report";
+
+    // A report call has only one permitted action: speak a factual summary and
+    // end. It receives no mandate or carrier tools and never enters the
+    // negotiation instruction path.
+    if (isClientReport) {
+      const report = currentClientCarrierReport();
+      if (!report) {
+        log(this.callId, "error", {
+          where: "realtime.onOpen",
+          msg: "report phase with no eligible carrier report",
+        });
+        this.cb.onFailure?.("missing_client_report");
+        return;
+      }
+      this.openSession(buildClientReportInstructions(report), clientReportToolDefinitions);
+      return;
+    }
 
     // Calling the client about a change we are not authorised to accept. The
     // whole call is defined by the pending change; without one there is nothing
@@ -535,13 +557,16 @@ export class RealtimeBridge {
     if (
       evt.name === "end_intake" ||
       evt.name === "end_negotiation" ||
-      evt.name === "end_escalation"
+      evt.name === "end_escalation" ||
+      evt.name === "end_client_report"
     ) {
       const kind =
         evt.name === "end_intake"
           ? "intake_done"
           : evt.name === "end_escalation"
             ? "escalation_done"
+            : evt.name === "end_client_report"
+              ? "client_report_done"
             : "negotiation_done";
       log(this.callId, kind, result);
       this.cb.onEvent(kind, result);

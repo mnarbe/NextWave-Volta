@@ -2,9 +2,14 @@
 // camino en que el envío falla (que es el que no debe mentirle al modelo).
 import { createApp } from "../http/routes.js";
 import { createCall, getCall, findCommitment } from "../store/calls.js";
-import { confirmToken, verifyConfirmToken, sendRecap } from "./recap.js";
+import { buildRecapBody, confirmToken, verifyConfirmToken, sendRecap } from "./recap.js";
 import { commitmentState } from "../domain/types.js";
 import type { Commitment } from "../domain/types.js";
+
+// This test asserts the no-provider path. A developer's local .env may contain
+// real Resend credentials, so clear them before sendRecap reads the environment.
+process.env.RESEND_API_KEY = "";
+process.env.RESEND_FROM = "";
 
 let pass = 0, fail = 0;
 const check = (n: string, c: boolean, e = "") =>
@@ -31,6 +36,14 @@ check("distinto por compromiso", t !== confirmToken("c-test-2", "carrier"));
 check("verifica el válido", verifyConfirmToken("c-test-1", "carrier", t));
 check("rechaza el falso", !verifyConfirmToken("c-test-1", "carrier", "deadbeef"));
 check("rechaza cruzar partes", !verifyConfirmToken("c-test-1", "client", t));
+
+console.log("\n-- client carrier context --");
+const profileCommitment: Commitment = { ...commitment, agreedByName: "Fletes del Norte" };
+const clientMail = buildRecapBody(profileCommitment, getCall(callId)!.mandate, "client");
+const carrierMail = buildRecapBody(profileCommitment, getCall(callId)!.mandate, "carrier");
+check("cliente ve perfil antes de confirmar", clientMail.html.includes("Carrier intelligence"));
+check("carrier no recibe perfil del carrier", !carrierMail.html.includes("Carrier intelligence"));
+check("perfil declara que es contexto", clientMail.text.includes("additional context only"));
 
 console.log("\n-- sin API key: NO puede decir que mandó --");
 const r = await sendRecap(commitment, getCall(callId)!.mandate);

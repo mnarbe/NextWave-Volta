@@ -75,6 +75,14 @@ Volta has a narrow mandate by design.
 
 The current prototype prepares the handover context but does not yet warm-transfer the active call to a human. That final telephony step is a planned extension, not a capability claimed by the demo.
 
+## Carrier intelligence
+
+The dashboard includes a read-only carrier-intelligence panel. It calculates price, negotiation, and post-booking stability signals from a versioned demo history and always shows its sample size.
+
+This information does not affect offer ranking, negotiation behavior, mandate checks, or carrier calls. After the winning carrier has been confirmed, a human can explicitly trigger a separate client-summary call from the dashboard. Volta states the selected offer and the calculated profile as additional context; the profile did not influence the selection. Future versions can append observed interactions using the same record format and use those profiles to adapt a strategy for a specific carrier.
+
+The client-facing booking-confirmation email also includes the selected carrier's profile before its confirmation link. The carrier's own confirmation email does not include this context.
+
 ## Tech stack
 
 - TypeScript and Node.js

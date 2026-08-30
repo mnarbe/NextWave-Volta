@@ -13,6 +13,7 @@ import { verifyConfirmToken } from "../email/recap.js";
 import { commitmentState } from "../domain/types.js";
 import { getMandate } from "../store/mandates.js";
 import { getAllNegotiations } from "../store/negotiations.js";
+import { listCarrierProfiles } from "../intelligence/carrier-profiles.js";
 import { telephonyRoutes } from "./telephony.js";
 import { roundRoutes } from "./round.js";
 
@@ -47,6 +48,13 @@ export function createApp() {
   // SYNC-READ: same.
   app.get("/negotiations", (_req, res) => {
     res.json(getAllNegotiations());
+  });
+
+  // Read-only carrier intelligence for the dashboard. This is intentionally
+  // separate from the negotiation path: profiles inform people, never Volta's
+  // ranking, prompts, mandate checks, or call behavior.
+  app.get("/carrier-profiles", (_req, res) => {
+    res.json(listCarrierProfiles());
   });
 
   // The link from the recap email. Volta promises on the call that the booking

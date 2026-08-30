@@ -107,6 +107,7 @@ export type LogEntry = {
     | "change_needs_provider"
     | "provider_decided"
     | "escalation_done"
+    | "client_report_done"
     // The failsafe fired: a person is taking the call over.
     | "handed_to_human"
     | "error";

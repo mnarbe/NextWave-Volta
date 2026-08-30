@@ -16,6 +16,7 @@ let micMode = false;      // is this tab acting as the line, via microphone?
 let activeCallSid = null; // phone call in flight (for the Hang up button)
 let roundMode = false;    // a parallel carrier round is running
 let lineName = "Main line"; // label for the live (phone/browser) lane
+let winnerConfirmationActive = false;
 
 // --- connection --------------------------------------------------------------
 // Connects on page load, WITHOUT a microphone: it listens to the events of every
@@ -84,6 +85,37 @@ function onServerMessage(ev) {
       view.addTool("tool_result", { name: "round_done", result: msg.data });
       break;
 
+    // A scripted winner is recorded immediately. A human winner is confirmed
+    // on its own phone call, and only then becomes eligible for a client report.
+    case "winner_recorded":
+      view.setClientReportAvailable(true);
+      break;
+
+    case "winner_call_scheduled":
+      view.setClientReportAvailable(false);
+      view.setHint(`Confirming ${msg.data.carrierName} before the client summary is available.`);
+      break;
+
+    case "winner_call_failed":
+      view.setClientReportAvailable(false);
+      view.setPhoneState(`winner confirmation failed: ${msg.data.error}`, "err");
+      break;
+
+    case "client_report_scheduled":
+      view.setPhoneState(`calling the client with the ${msg.data.carrierName} summary…`, "live");
+      view.setHint("Client summary queued. Carrier intelligence remains informational only.");
+      break;
+
+    case "client_report_done":
+      view.setPhoneState("client summary delivered");
+      view.addMessage("agent", "Client carrier summary delivered.");
+      break;
+
+    case "client_report_failed":
+      view.setPhoneState(`client summary failed: ${msg.data.error}`, "err");
+      view.setClientReportAvailable(true);
+      break;
+
     // --- phone calls ----------------------------------------------------------
     case "phone_call_started": {
       const mode = (msg.data && msg.data.mode) || "intake";
@@ -95,6 +127,7 @@ function onServerMessage(ev) {
       view.setHangupVisible(Boolean(activeCallSid));
       view.setPhase(mode === "negotiate" ? "negotiate" : "intake");
       lineName = mode === "negotiate" ? "Human carrier" : "Client · intake";
+      if (msg.data && msg.data.intent === "confirm") winnerConfirmationActive = true;
       break;
     }
 
@@ -103,6 +136,11 @@ function onServerMessage(ev) {
       activeCallSid = null;
       view.setHangupVisible(false);
       view.setPhase("idle");
+      if (winnerConfirmationActive) {
+        winnerConfirmationActive = false;
+        view.setClientReportAvailable(true);
+        view.setHint("Carrier confirmed. You can now call the client summary.");
+      }
       break;
 
     case "call_started":
@@ -364,6 +402,21 @@ async function startRound() {
   }
 }
 
+// Deliberately separate from startRound: a human clicks this after reviewing
+// the result, so the report cannot race the carrier confirmation call.
+async function callClientReport() {
+  el.clientReportBtn.disabled = true;
+  try {
+    const res = await fetch("/client-report", { method: "POST" });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.reason || "could not schedule client summary");
+    view.setPhoneState(`calling the client about ${body.carrierName}…`, "live");
+  } catch (e) {
+    view.setPhoneState(e.message, "err");
+    el.clientReportBtn.disabled = false;
+  }
+}
+
 // Manual intake cut (if Volta does not call end_intake on its own).
 function forceCut() {
   el.forceCutBtn.hidden = true;
@@ -376,6 +429,7 @@ function forceCut() {
 el.startBtn.onclick = () => startMic().catch((e) => { alert(e.message); stopMic(); });
 el.stopBtn.onclick = stopMic;
 el.roundBtn.onclick = startRound;
+el.clientReportBtn.onclick = callClientReport;
 el.answerBtn.onclick = () => answerCall().catch((e) => alert(e.message));
 el.forceCutBtn.onclick = forceCut;
 el.callBtn.onclick = callCarrier;
