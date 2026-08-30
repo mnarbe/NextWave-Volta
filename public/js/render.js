@@ -1,19 +1,4 @@
-// ============================================================================
-// render.js — EVERYTHING that draws on screen.
-// Owner: design.
-//
-// This is the only file that touches the DOM. It knows nothing about
-// WebSockets, Twilio or audio: it takes already-chewed data and paints it. If
-// you want to change how a card, a badge or a panel looks, it is all here (and
-// in styles.css).
-//
-// The contract with client.js is the exported functions below. As long as they
-// keep existing with the same names, you can rewrite the insides entirely
-// without breaking anyone.
-// ============================================================================
-
-// The page's elements. client.js uses these to listen for clicks and read the
-// inputs; everything else it draws goes through the functions in this file.
+// Volta's DOM contract. client.js owns transport and events; this module owns presentation.
 export const ui = {
   dot: document.getElementById("dot"),
   roundBtn: document.getElementById("roundBtn"),
@@ -36,59 +21,134 @@ const mandateCard = document.getElementById("mandateCard");
 const mPrice = document.getElementById("mPrice");
 const mFields = document.getElementById("mFields");
 const mStatus = document.getElementById("mStatus");
+const routeOrigin = document.getElementById("routeOrigin");
+const routeDestination = document.getElementById("routeDestination");
+const mandateTerms = document.getElementById("mandateTerms");
 const carriersEl = document.getElementById("carriers");
 const decisionEl = document.getElementById("decision");
 const phoneNum = document.getElementById("phoneNum");
 const phoneState = document.getElementById("phoneState");
 
-let mandateCap = null; // the client's price cap, to compare offers against
+const drawer = document.getElementById("conversationDrawer");
+const drawerScrim = document.getElementById("drawerScrim");
+const drawerClose = document.getElementById("drawerClose");
+const drawerTitle = document.getElementById("drawerTitle");
+const drawerStatus = document.getElementById("drawerStatus");
+const drawerPrice = document.getElementById("drawerPrice");
+const drawerEvidenceBody = document.getElementById("drawerEvidenceBody");
+const drawerHistory = document.getElementById("drawerHistory");
 
-export function escapeHtml(s) {
-  return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+let mandateCap = null;
+let mandateRecord = null;
+let roundResult = null;
+let selectedCallId = null;
+let lastUpdatedCallId = null;
+let activePhase = "idle";
+const negs = new Map();
+const transcripts = new Map();
+const generalTranscript = [];
+
+export function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  }[char]));
 }
 
-// --- overall screen state ----------------------------------------------------
+function fmtMxn(value, withSymbol = true) {
+  if (value == null || !Number.isFinite(Number(value))) return "—";
+  const amount = Number(value).toLocaleString("es-AR", { maximumFractionDigits: 0 });
+  return `${withSymbol ? "$" : ""}${amount}`;
+}
 
-// Green dot: we have a connection to the backend.
+function parseDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function fmtDate(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return value || "—";
+  const months = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"];
+  return `${match[3]} ${months[Number(match[2]) - 1]} ${match[1]}`;
+}
+
+function fmtTime(value) {
+  const match = String(value || "").match(/T(\d{2}):(\d{2})/);
+  return match ? `${match[1]}:${match[2]}` : "—";
+}
+
+function statusLabel(status) {
+  return ({ in_progress: "Negociando", deal: "Cerrada", no_deal: "Sin acuerdo" })[status] || "Abierta";
+}
+
+function transcriptKey(name) {
+  return String(name || "").trim().toLowerCase();
+}
+
+function activeHumanNegotiation() {
+  return [...negs.values()].find((record) => record.kind === "human" && record.status === "in_progress");
+}
+
+function localizeStatus(value) {
+  const text = String(value || "");
+  if (/^No phone: use browser mode\.?$/i.test(text)) return "Teléfono no configurado · usá modo navegador.";
+  if (/^missing in \.env:/i.test(text)) return "Configuración telefónica incompleta.";
+  if (/^could not reach \/twilio\/health/i.test(text)) return "No se pudo consultar el estado telefónico.";
+  if (/^no call$/i.test(text)) return "Sin llamada";
+  if (/^dialling/i.test(text)) return "Marcando…";
+  if (/^on a call with the carrier$/i.test(text)) return "Llamada activa con carrier";
+  if (/^on a call with the client$/i.test(text)) return "Llamada activa con cliente";
+  if (/^change needs the client's decision$/i.test(text)) return "El cambio necesita decisión del cliente";
+  if (/^Call .+ and hand Volta the job\.?$/i.test(text)) return "Llamá a Volta para entregar el mandato.";
+  if (/^No phone:/i.test(text)) return "Teléfono no disponible · usá modo navegador.";
+  if (/^Round running/i.test(text)) return "Ronda en curso · las negociaciones avanzan en paralelo.";
+  if (/^Round complete/i.test(text)) return "Ronda completa.";
+  if (/^Intake done/i.test(text)) return "Mandato completo · comienza la negociación.";
+  return text;
+}
+
 export function setConnected(on) {
-  ui.dot.classList.toggle("on", Boolean(on));
+  const connected = Boolean(on);
+  ui.dot.classList.toggle("on", connected);
+  document.body.classList.toggle("is-offline", !connected);
 }
 
 export function setHint(text) {
-  hintEl.textContent = text;
+  hintEl.textContent = localizeStatus(text);
 }
 
-// phase: "idle" | "intake" | "negotiate"
-export function setPhase(p) {
-  if (p === "intake") {
+export function setPhase(phase) {
+  activePhase = phase || "idle";
+  if (phase === "intake") {
     phaseChip.hidden = false;
-    phaseChip.className = "chip";
-    phaseChip.textContent = "intake · client";
-    hintEl.textContent = "Volta is taking the job and the maximum price.";
-  } else if (p === "negotiate") {
+    phaseChip.textContent = "Mandato · cliente";
+    hintEl.textContent = "Volta está capturando el mandato.";
+  } else if (phase === "negotiate") {
     phaseChip.hidden = false;
-    phaseChip.className = "chip negotiate";
-    phaseChip.textContent = "negotiation · carrier";
-    hintEl.textContent = "Volta wants a lower price; two refusals and it closes.";
+    phaseChip.textContent = "Negociación · carrier";
+    hintEl.textContent = "Volta está negociando precio y condiciones.";
   } else {
     phaseChip.hidden = true;
+    hintEl.textContent = roundResult ? roundResult.reason : "Esperando actividad.";
   }
 }
 
-// Refusal counter on the phase chip.
-export function setRefusals(n) {
-  if (n) phaseChip.textContent = `negotiation · refusals ${n}/2`;
+export function setRefusals(count) {
+  if (count) phaseChip.textContent = `Negociación · ${count}/2 negativas`;
 }
 
-// --- phone bar ---------------------------------------------------------------
 export function setPhoneNumber(text) {
-  phoneNum.textContent = text;
+  phoneNum.textContent = String(text || "").replace(/^phone:/i, "Teléfono:");
 }
 
-// kind: "" (neutral) | "live" (green) | "err" (red)
 export function setPhoneState(text, kind) {
-  phoneState.textContent = text;
-  phoneState.className = "phone-state" + (kind ? " " + kind : "");
+  phoneState.textContent = localizeStatus(text);
+  phoneState.className = `phone-state${kind ? ` ${kind}` : ""}`;
 }
 
 export function setCallButtonEnabled(on) {
@@ -99,246 +159,349 @@ export function setHangupVisible(on) {
   ui.hangBtn.hidden = !on;
 }
 
-// --- conversation and backend activity ---------------------------------------
+function pushTranscript(name, item) {
+  const key = transcriptKey(name);
+  if (!key) return;
+  const list = transcripts.get(key) || [];
+  list.push(item);
+  transcripts.set(key, list.slice(-80));
+}
+
 export function addMessage(who, text) {
-  const d = document.createElement("div");
-  d.className = "msg " + (who === "user" ? "user" : "agent");
-  d.innerHTML = `<div class="who">${who === "user" ? "Other party" : "Volta"}</div>${escapeHtml(text)}`;
-  convo.appendChild(d);
-  convo.scrollTop = convo.scrollHeight;
+  const raw = String(text || "");
+  const match = raw.match(/^\[([^\]]+)\]\s*(.*)$/s);
+  const currentHuman = activeHumanNegotiation();
+  const carrierName = match?.[1] || currentHuman?.carrierName || null;
+  const body = match?.[2] || raw;
+  const item = {
+    who: who === "user" ? "user" : "agent",
+    text: body,
+    ts: new Date().toISOString(),
+  };
+
+  generalTranscript.push({ ...item, carrierName });
+  if (carrierName) pushTranscript(carrierName, item);
+  if (selectedCallId) renderDrawer();
 }
 
 export function addTool(kind, data) {
-  const d = document.createElement("div");
-  d.className = "tool";
-  if (kind === "tool_call") {
-    d.innerHTML = `<span class="name">→ ${data.name}</span><pre>${escapeHtml(JSON.stringify(data.args, null, 2))}</pre>`;
-  } else if (kind === "tool_result") {
-    const decision = data.result && data.result.decision;
-    const badge = decision ? `<span class="badge ${decision}">${decision}</span>` : "";
-    d.innerHTML = `<span class="name">← ${data.name}</span>${badge}<pre>${escapeHtml(JSON.stringify(data.result, null, 2))}</pre>`;
-  } else if (kind === "barge_in") {
-    d.innerHTML = `<span class="name">⚡ barge-in</span> (the agent was interrupted)`;
-  } else if (kind === "error") {
-    d.innerHTML = `<span class="name" style="color:#ff8f9c">error</span><pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
-  }
-  toolsEl.appendChild(d);
-  toolsEl.scrollTop = toolsEl.scrollHeight;
+  const item = document.createElement("div");
+  item.className = "tool";
+  const name = data?.name || kind || "evento";
+  const payload = kind === "tool_call" ? data?.args : data?.result ?? data;
+  item.innerHTML = `<span class="name">${escapeHtml(name)}</span><pre>${escapeHtml(JSON.stringify(payload, null, 2))}</pre>`;
+  toolsEl.appendChild(item);
 }
 
-// --- captured mandate panel --------------------------------------------------
-export function renderMandate(m, opts = {}) {
-  if (!m) return;
+export function renderMandate(mandate, options = {}) {
+  if (!mandate) return;
+  mandateRecord = mandate;
+  mandateCap = mandate.maxPriceMxn != null ? Number(mandate.maxPriceMxn) : mandateCap;
   mandateCard.classList.remove("empty");
-  if (opts.justCaptured) mandateCard.classList.add("captured");
-  mPrice.textContent =
-    m.maxPriceMxn != null ? Number(m.maxPriceMxn).toLocaleString("en-US") : "—";
-  const rows = [
-    ["Origin", m.origin],
-    ["Destination", m.destination],
-    ["Container", m.containerNumber],
-    ["Pickup from", m.pickupWindowStart],
-    ["Pickup until", m.pickupWindowEnd],
-    ["Forbidden conditions", (m.forbiddenConditions || []).join(", ")],
-    ["Notes", m.notes],
-  ].filter(([, v]) => v);
-  mFields.innerHTML = rows
-    .map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd>`)
+  mandateCard.classList.toggle("captured", Boolean(options.justCaptured));
+  routeOrigin.textContent = mandate.origin || "Origen pendiente";
+  routeDestination.textContent = mandate.destination || "Destino pendiente";
+  const pickupDate = fmtDate(mandate.pickupWindowStart);
+  const pickupStart = fmtTime(mandate.pickupWindowStart);
+  const pickupEnd = fmtTime(mandate.pickupWindowEnd);
+  mFields.innerHTML = `
+    <div><small>Contenedor</small><b>${escapeHtml(mandate.containerNumber || "—")}</b></div>
+    <div><small>Retiro requerido</small><b>${escapeHtml(pickupDate)}</b><span>${escapeHtml(`${pickupStart}–${pickupEnd}`)}</span></div>
+    <div class="max-fact"><small>Precio máximo</small><strong id="mPrice">${escapeHtml(fmtMxn(mandate.maxPriceMxn))}</strong><span>MXN</span></div>`;
+
+  const terms = [];
+  const forbidden = mandate.forbiddenConditions || [];
+  if (forbidden.some((term) => /prepayment|prepago/i.test(term))) terms.push("Sin prepago");
+  if (forbidden.some((term) => /no insurance|seguro/i.test(term))) terms.push("Seguro obligatorio");
+  for (const term of forbidden) {
+    if (!/prepayment|prepago|no insurance|seguro/i.test(term)) terms.push(term);
+  }
+  mandateTerms.innerHTML = (terms.length ? terms : ["Sin condiciones adicionales"])
+    .map((term) => `<span>${escapeHtml(term)}</span>`)
     .join("");
-  const when = m.capturedAt ? new Date(m.capturedAt).toLocaleTimeString() : "";
-  mStatus.textContent = "Mandate saved" + (when ? " · " + when : "");
-  mandateCap = m.maxPriceMxn != null ? Number(m.maxPriceMxn) : mandateCap;
+
+  const when = mandate.capturedAt ? new Date(mandate.capturedAt).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", hour12: false }) : "";
+  mStatus.textContent = `Mandato guardado${when ? ` · ${when}` : ""}`;
+  mandateCard.querySelector(".mandate-stamp").innerHTML = "Mandato<br>activo";
+  renderCarriers();
+  renderDecision();
 }
 
 export function setMandateDone(text) {
-  mStatus.textContent = text;
+  mStatus.textContent = /^Intake complete/i.test(String(text || ""))
+    ? "Mandato completo · Volta terminó la llamada con el cliente."
+    : localizeStatus(text);
   mStatus.classList.add("done");
 }
 
-// --- carrier negotiation panel -----------------------------------------------
-const negs = new Map(); // callId -> negotiation record
-
-function fmtMxn(n) {
-  return n != null ? "$" + Number(n).toLocaleString("en-US") : "—";
+function comparisonFor(callId) {
+  return roundResult?.ranking?.find((record) => record.callId === callId) || null;
 }
 
-function delayBadge(days, note) {
-  if (days == null && !note) return "";
-  if (days === 0 && !note) return `<span class="delay none">in window</span>`;
-  const label = days > 0 ? `+${days} day${days === 1 ? "" : "s"}` : (note ? "delay" : "");
-  return `<span class="delay">⏱ ${escapeHtml(label)}${note ? " · " + escapeHtml(note) : ""}</span>`;
+function carrierPresentation(record) {
+  const latest = record.latest || { conditions: [] };
+  const final = record.final;
+  const comparison = comparisonFor(record.callId);
+  const delay = final?.pickupDelayDays ?? latest.pickupDelayDays ?? 0;
+  const price = final?.priceMxn ?? latest.priceMxn;
+  const overCap = price != null && mandateCap != null && Number(price) > Number(mandateCap);
+  const late = delay > 0;
+  const winner = roundResult?.winnerCallId === record.callId;
+  const disqualifiers = comparison?.disqualifiers || [];
+  const invalid = comparison ? !comparison.eligible : Boolean(final && (overCap || late));
+  let stamp = statusLabel(record.status);
+  let note = record.status === "in_progress" ? "Volta sigue negociando" : "Conversación cerrada";
+
+  if (winner) {
+    stamp = "Válido · a tiempo";
+    note = "Menor oferta elegible";
+  } else if (late) {
+    stamp = "Inválido · tarde";
+    note = "Más barato, pero llega tarde";
+  } else if (overCap) {
+    stamp = "Sobre máximo";
+    note = record.status === "in_progress" ? "Volta prepara contrapropuesta" : "Excede el mandato";
+  } else if (comparison?.eligible) {
+    stamp = "Oferta válida";
+    note = "Cumple el mandato";
+  } else if (record.status === "no_deal") {
+    stamp = "Sin acuerdo";
+    note = "No cerró una oferta";
+  }
+
+  return { latest, final, comparison, delay, price, overCap, late, winner, invalid, disqualifiers, stamp, note };
 }
 
-function capVs(price) {
-  if (price == null || mandateCap == null) return "";
-  const cls = price <= mandateCap ? "under" : "over";
-  const rel = price <= mandateCap ? "within cap" : "OVER cap";
-  return `<span class="vs ${cls}">${rel} (${fmtMxn(mandateCap)})</span>`;
-}
-
-function carrierCard(c) {
-  const L = c.latest || { conditions: [] };
-  const name = c.carrierName
-    ? escapeHtml(c.carrierName)
-    : `<span class="anon">Carrier (unnamed)</span>`;
-  const status = c.status || "in_progress";
-  const statusLabel = { in_progress: "in progress", deal: "deal", no_deal: "no deal" }[status];
-  const conds = (L.conditions || [])
-    .map((x) => `<span class="cond-chip">${escapeHtml(x)}</span>`)
-    .join("");
-  const rows = [];
-  if (L.pickupTime) rows.push(["Pickup", escapeHtml(L.pickupTime) + delayBadge(L.pickupDelayDays, L.delayNote)]);
-  else if (L.pickupDelayDays != null || L.delayNote) rows.push(["Pickup", delayBadge(L.pickupDelayDays, L.delayNote)]);
-  rows.push(["Refusals to come down", `${c.refusals || 0}/2`]);
-  rows.push(["Offers recorded", String((c.offers || []).length)]);
-
+function carrierTicket(record) {
+  const view = carrierPresentation(record);
+  const classes = [
+    "ticket",
+    view.winner ? "winner" : "",
+    view.late ? "late" : "",
+    view.overCap ? "over" : "",
+    view.invalid ? "invalid" : "",
+    record.status === "in_progress" ? "negotiating" : "",
+    lastUpdatedCallId === record.callId ? "updated" : "",
+  ].filter(Boolean).join(" ");
+  const kind = record.kind === "human" ? "Humano" : record.kind === "sim" ? "Sim" : "Carrier";
+  const buttonLabel = `Abrir conversación con ${record.carrierName || "carrier"}`;
   return `
-    <div class="carrier ${status}">
-      <div class="carrier-head">
-        <span class="carrier-name">${name}</span>
-        <span class="badge ${status}">${statusLabel}</span>
-      </div>
-      <div class="price">${fmtMxn(L.priceMxn)}<span class="cur">MXN</span>${capVs(L.priceMxn)}</div>
-      <dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
-      ${conds ? `<div class="conds">${conds}</div>` : ""}
-      ${
-        (c.offers || []).length
-          ? `<details><summary>History (${c.offers.length})</summary><pre>${escapeHtml(
-              JSON.stringify(c.offers, null, 2)
-            )}</pre></details>`
-          : ""
-      }
-    </div>`;
+    <article class="${classes}">
+      <button class="ticket-main" data-call-id="${escapeHtml(record.callId)}" aria-label="${escapeHtml(buttonLabel)}" aria-expanded="${selectedCallId === record.callId}">
+        <span class="ticket-identity"><small>${escapeHtml(kind)} · ${escapeHtml(statusLabel(record.status))}</small><b>${escapeHtml(record.carrierName || "Carrier sin nombre")}</b></span>
+        <span class="stamp">${escapeHtml(view.stamp)}</span>
+        <span class="ticket-offer"><small>${record.status === "in_progress" ? "Última oferta" : "Oferta actual"}</small><strong>${escapeHtml(fmtMxn(view.price))}</strong> <i>MXN</i></span>
+        <span class="ticket-note">${escapeHtml(view.note)}</span>
+      </button>
+    </article>`;
 }
 
 function renderCarriers() {
   const list = [...negs.values()].sort((a, b) => (a.startedAt || "").localeCompare(b.startedAt || ""));
   if (!list.length) {
-    carriersEl.className = "hint";
-    carriersEl.textContent = "No carrier call yet.";
+    carriersEl.className = "carriers-empty";
+    carriersEl.innerHTML = "<p>Todavía no hay conversaciones con carriers.</p>";
     return;
   }
   carriersEl.className = "";
-  carriersEl.innerHTML = list.map(carrierCard).join("");
+  carriersEl.innerHTML = list.map(carrierTicket).join("");
 }
 
-// When a round has closed, its result takes over the "Final decision" panel.
-let roundResult = null;
+function renderRoundDecision(decision) {
+  const winner = decision.ranking?.find((record) => record.callId === decision.winnerCallId);
+  if (winner) {
+    decisionEl.className = "decision-slip deal";
+    decisionEl.innerHTML = `
+      <p class="eyebrow">Decisión determinística</p>
+      <span class="stamp">Seleccionado</span>
+      <h3>${escapeHtml(winner.carrierName)}</h3>
+      <span class="decision-price">${escapeHtml(fmtMxn(winner.priceMxn))} <small>MXN</small></span>
+      <p>Menor oferta válida, dentro del máximo y a tiempo.</p>`;
+    return;
+  }
 
-function renderRoundBanner(d) {
-  const rows = (d.ranking || [])
-    .map((r, i) => {
-      const mark = r.callId === d.winnerCallId ? "🏆 " : r.eligible ? "• " : "✗ ";
-      const price = r.priceMxn != null ? "$" + Number(r.priceMxn).toLocaleString("en-US") : "—";
-      const why = r.disqualifiers && r.disqualifiers.length
-        ? ` <span class="anon">(${escapeHtml(r.disqualifiers.join("; "))})</span>`
-        : "";
-      const delay = r.pickupDelayDays > 0 ? ` +${r.pickupDelayDays}d` : "";
-      return `<li>${mark}<strong>${escapeHtml(r.carrierName)}</strong> — ${price}${escapeHtml(delay)}${why}</li>`;
-    })
-    .join("");
-  const review = (d.needsHumanReview || [])
-    .map((x) => `<li>${escapeHtml(x.carrierName)} — ${escapeHtml(x.why)}</li>`)
-    .join("");
-  decisionEl.className = "decision " + (d.outcome === "deal" ? "deal" : "no_deal");
+  const review = decision.needsHumanReview || [];
+  decisionEl.className = "decision-slip no-deal";
   decisionEl.innerHTML = `
-    <div class="outcome">${d.outcome === "deal" ? "✓ ROUND WON" : "✗ ROUND — NO CLEAN WINNER"}</div>
-    <div class="summary">${escapeHtml(d.reason || "")}</div>
-    <ol class="kv" style="list-style:none;padding:0">${rows}</ol>
-    ${review ? `<div class="relay"><div class="relay-title">Needs human review</div><ul>${review}</ul></div>` : ""}`;
+    <p class="eyebrow">Decisión determinística</p>
+    <span class="stamp">Intervención</span>
+    <h3>Sin ganador limpio</h3>
+    <p>${escapeHtml(decision.reason || "Ninguna oferta cumple todo el mandato.")}</p>
+    ${review.length ? `<div class="review-list">${review.map((item) => `<span>${escapeHtml(item.carrierName)} · ${escapeHtml(item.why)}</span>`).join("")}</div>` : ""}`;
+}
+
+function renderDecision() {
+  if (roundResult) return renderRoundDecision(roundResult);
+  const finished = [...negs.values()].filter((record) => record.final);
+  if (!finished.length) {
+    decisionEl.className = "decision-slip empty";
+    decisionEl.innerHTML = `
+      <p class="eyebrow">Decisión determinística</p>
+      <h3>La ronda todavía no cerró</h3>
+      <p>Cuando haya ofertas, Volta elegirá la menor que cumpla precio, horario y condiciones.</p>`;
+    return;
+  }
+  const deal = finished.find((record) => record.final?.outcome === "deal");
+  if (!deal) {
+    decisionEl.className = "decision-slip no-deal";
+    decisionEl.innerHTML = `<p class="eyebrow">Decisión pendiente</p><span class="stamp">En espera</span><h3>Sin acuerdo limpio</h3><p>La ronda necesita más ofertas o intervención humana.</p>`;
+    return;
+  }
+  const price = deal.final.priceMxn ?? deal.latest?.priceMxn;
+  decisionEl.className = "decision-slip deal";
+  decisionEl.innerHTML = `<p class="eyebrow">Mejor cierre disponible</p><span class="stamp">Oferta cerrada</span><h3>${escapeHtml(deal.carrierName || "Carrier")}</h3><span class="decision-price">${escapeHtml(fmtMxn(price))} <small>MXN</small></span><p>Esperando que termine la ronda para adjudicar.</p>`;
 }
 
 export function renderRoundResult(decision) {
   roundResult = decision || null;
-  renderDecision();
-}
-
-function renderDecision() {
-  if (roundResult) return renderRoundBanner(roundResult);
-  const done = [...negs.values()].filter((c) => c.final);
-  if (!done.length) {
-    decisionEl.className = "hint";
-    decisionEl.textContent = "No negotiation has closed yet.";
-    return;
-  }
-  // Prefer showing the closed deal; if there is none, the latest close.
-  const c =
-    done.find((x) => x.final.outcome === "deal") ||
-    done.sort((a, b) => (a.final.decidedAt || "").localeCompare(b.final.decidedAt || "")).slice(-1)[0];
-  const f = c.final;
-  const name = c.carrierName || "the carrier";
-  const head =
-    f.outcome === "deal"
-      ? `✓ DEAL CLOSED with ${escapeHtml(name)}`
-      : `✗ NO DEAL with ${escapeHtml(name)}`;
-  const relay = [];
-  if (f.pickupDelayDays > 0 || f.delayNote) {
-    const d = f.pickupDelayDays > 0 ? `Pickup ${f.pickupDelayDays} day${f.pickupDelayDays === 1 ? "" : "s"} late` : "Pickup date deviation";
-    relay.push(d + (f.delayNote ? ` — ${f.delayNote}` : ""));
-  }
-  for (const cond of f.conditionsToRelay || []) relay.push(cond);
-
-  const priceLine =
-    f.priceMxn != null
-      ? `<div class="price">${fmtMxn(f.priceMxn)}<span class="cur">MXN</span>${
-          f.priceWithinCap === false
-            ? `<span class="vs over">OVER cap (${fmtMxn(mandateCap)})</span>`
-            : f.priceWithinCap === true
-            ? `<span class="vs under">within cap (${fmtMxn(mandateCap)})</span>`
-            : ""
-        }</div>`
-      : "";
-  const rows = [];
-  if (f.pickupTime) rows.push(["Pickup", escapeHtml(f.pickupTime) + delayBadge(f.pickupDelayDays, null)]);
-
-  decisionEl.className = "decision " + f.outcome;
-  decisionEl.innerHTML = `
-    <div class="outcome">${head}</div>
-    ${priceLine}
-    ${rows.length ? `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>` : ""}
-    <div class="relay">
-      <div class="relay-title">To relay to the client</div>
-      ${
-        relay.length
-          ? `<ul>${relay.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>`
-          : `<span class="empty">No deviations or conditions to report.</span>`
-      }
-    </div>
-    ${f.summary ? `<div class="summary">${escapeHtml(f.summary)}</div>` : ""}`;
-}
-
-// An event brought news about a negotiation.
-export function upsertNeg(rec) {
-  if (!rec || !rec.callId) return;
-  const prev = negs.get(rec.callId);
-  // If the event carries the full record we use it; otherwise keep the previous.
-  negs.set(rec.callId, rec.offers ? rec : prev || rec);
   renderCarriers();
   renderDecision();
+  if (selectedCallId) renderDrawer();
 }
 
-// Re-read the backend state (source of truth) and repaint.
+export function upsertNeg(record) {
+  if (!record?.callId) return;
+  const previous = negs.get(record.callId);
+  negs.set(record.callId, record.offers ? record : previous || record);
+  lastUpdatedCallId = record.callId;
+  renderCarriers();
+  renderDecision();
+  if (selectedCallId === record.callId) renderDrawer();
+  window.setTimeout(() => {
+    if (lastUpdatedCallId === record.callId) {
+      lastUpdatedCallId = null;
+      renderCarriers();
+    }
+  }, 850);
+}
+
 export function refreshNegotiations() {
   return fetch("/negotiations")
-    .then((r) => r.json())
+    .then((response) => response.json())
     .then((list) => {
       if (!Array.isArray(list)) return;
       negs.clear();
-      for (const c of list) negs.set(c.callId, c);
+      for (const record of list) negs.set(record.callId, record);
       renderCarriers();
       renderDecision();
+      if (selectedCallId) renderDrawer();
+    })
+    .catch(() => {});
+}
+
+function refreshRound() {
+  return fetch("/round")
+    .then((response) => response.json())
+    .then((state) => {
+      if (state?.decision) renderRoundResult(state.decision);
+      if (state?.waitingForHuman) setHint(`Esperando a ${state.waitingForHuman}.`);
     })
     .catch(() => {});
 }
 
 export function clearNegotiations() {
   negs.clear();
+  transcripts.clear();
   roundResult = null;
+  selectedCallId = null;
+  closeConversation();
   renderCarriers();
   renderDecision();
 }
 
-// --- simulated inbound call (browser mode only) ------------------------------
+function transcriptFor(record) {
+  const exact = transcripts.get(transcriptKey(record.carrierName));
+  if (exact?.length) return exact;
+  return generalTranscript.filter((item) => transcriptKey(item.carrierName) === transcriptKey(record.carrierName));
+}
+
+function renderConversation(record) {
+  const list = transcriptFor(record);
+  if (!list.length) {
+    convo.innerHTML = `<p class="drawer-empty">La conversación aparecerá acá en cuanto llegue la primera transcripción.</p>`;
+    return;
+  }
+  convo.innerHTML = list.map((item) => {
+    const time = new Date(item.ts).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", hour12: false });
+    return `<article class="message ${item.who}"><div class="message-head"><b>${item.who === "agent" ? "Volta" : "Carrier"}</b><time>${escapeHtml(time)}</time></div><p>${escapeHtml(item.text)}</p></article>`;
+  }).join("");
+}
+
+function renderEvidence(record, view) {
+  const latest = view.latest || {};
+  const pickup = view.final?.pickupTime || latest.pickupTime;
+  const conditions = view.final?.conditionsToRelay || latest.conditions || [];
+  const disqualifiers = view.disqualifiers.length
+    ? view.disqualifiers
+    : [view.overCap ? "Precio sobre el máximo" : "", view.late ? "Retiro fuera de ventana" : ""].filter(Boolean);
+  drawerEvidenceBody.innerHTML = `
+    <div class="evidence-row"><span>Retiro propuesto</span><b>${escapeHtml(pickup ? `${fmtDate(pickup)} · ${fmtTime(pickup)}` : "Sin horario confirmado")}</b></div>
+    <div class="evidence-row ${view.late ? "bad" : ""}"><span>Ventana</span><b>${view.late ? `+${view.delay} día${view.delay === 1 ? "" : "s"}` : "Dentro del mandato"}</b></div>
+    <div class="evidence-row ${view.overCap ? "bad" : ""}"><span>Precio</span><b>${view.overCap ? "Sobre el máximo" : "Dentro del máximo"}</b></div>
+    <div class="evidence-row"><span>Condiciones</span><b>${escapeHtml(conditions.length ? conditions.join(" · ") : "Sin condiciones")}</b></div>
+    ${disqualifiers.length ? `<div class="evidence-row bad"><span>Causa</span><b>${escapeHtml(disqualifiers.join(" · "))}</b></div>` : ""}`;
+
+  const offers = record.offers || [];
+  drawerHistory.innerHTML = offers.length
+    ? offers.slice().reverse().map((offer) => `<div class="history-entry">${escapeHtml(fmtMxn(offer.priceMxn))} · ${escapeHtml(offer.pickupTime ? `${fmtDate(offer.pickupTime)} ${fmtTime(offer.pickupTime)}` : "sin horario")} ${offer.note ? `· ${escapeHtml(offer.note)}` : ""}</div>`).join("")
+    : `<p class="drawer-empty">No hay ofertas registradas.</p>`;
+}
+
+function renderDrawer() {
+  const record = negs.get(selectedCallId);
+  if (!record) return;
+  const view = carrierPresentation(record);
+  drawerTitle.textContent = record.carrierName || "Carrier";
+  drawerStatus.textContent = `${statusLabel(record.status)}${activePhase === "negotiate" && record.status === "in_progress" ? " · llamada activa" : ""}`;
+  drawerPrice.textContent = fmtMxn(view.price);
+  renderConversation(record);
+  renderEvidence(record, view);
+}
+
+function openConversation(callId) {
+  if (!negs.has(callId)) return;
+  selectedCallId = callId;
+  renderDrawer();
+  drawer.classList.add("open");
+  drawer.setAttribute("aria-hidden", "false");
+  drawerScrim.hidden = false;
+  document.body.classList.add("drawer-open");
+  renderCarriers();
+  drawerClose.focus();
+}
+
+function closeConversation() {
+  drawer.classList.remove("open");
+  drawer.setAttribute("aria-hidden", "true");
+  drawerScrim.hidden = true;
+  document.body.classList.remove("drawer-open");
+  selectedCallId = null;
+  renderCarriers();
+}
+
+carriersEl.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-call-id]");
+  if (button) openConversation(button.dataset.callId);
+});
+drawerClose.addEventListener("click", closeConversation);
+drawerScrim.addEventListener("click", closeConversation);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && drawer.classList.contains("open")) closeConversation();
+});
+
+document.querySelectorAll("[data-drawer-tab]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const target = button.dataset.drawerTab;
+    document.querySelectorAll("[data-drawer-tab]").forEach((tab) => {
+      const active = tab === button;
+      tab.classList.toggle("active", active);
+      tab.setAttribute("aria-pressed", String(active));
+    });
+    document.querySelectorAll(".drawer-panel").forEach((panel) => panel.classList.remove("active"));
+    document.getElementById(target === "conversation" ? "drawerConversation" : "drawerEvidence").classList.add("active");
+  });
+});
+
 export function showIncomingCall() {
   setPhase("ringing");
   phaseChip.hidden = true;
@@ -349,11 +512,10 @@ export function hideIncomingCall() {
   incoming.hidden = true;
 }
 
-// On load: previous mandate (sets the cap), then previous negotiations.
 export function loadInitialState() {
   return fetch("/mandate")
-    .then((r) => r.json())
-    .then((m) => m && renderMandate(m))
+    .then((response) => response.json())
+    .then((mandate) => mandate && renderMandate(mandate))
     .catch(() => {})
-    .finally(refreshNegotiations);
+    .finally(() => Promise.all([refreshNegotiations(), refreshRound()]));
 }

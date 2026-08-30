@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Volta — Living Manifest</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="refinements.css">
+</head>
+<body data-scenario="winner">
+  <a class="skip" href="#manifest">Saltar al manifiesto</a>
+  <header>
+    <a class="brand" href="../">VOLTA</a><span class="edition">Living Manifest</span><time>30 AGO 2026</time><span class="line-live"><i></i>Línea en vivo · 02:47</span>
+    <nav aria-label="Probar estados">
+      <button data-scenario="winner" aria-pressed="true">Resultado</button>
+      <button data-scenario="none">Sin ganador</button>
+      <button data-scenario="review">Intervención</button>
+      <button data-scenario="offline">Desconectado</button>
+    </nav>
+  </header>
+  <div class="offline-note" role="status"><span class="offline-copy">Sistema sincronizado</span><button class="reconnect">Reconectar</button></div>
+
+  <main id="manifest">
+    <section class="manifest-sheet">
+      <div class="sheet-title"><div><p class="eyebrow">Mandato del cliente</p><h1>Manzanillo <i>→</i> Guadalajara</h1></div><span class="stamp active">Mandato<br>activo</span></div>
+      <div class="facts">
+        <div><small>Contenedor</small><b>MSCU1234567</b></div>
+        <div><small>Retiro requerido</small><b>03 SEP 2026</b><span>08:00–18:00</span></div>
+        <div><small>Precio máximo</small><strong>$9.000</strong><span>MXN</span></div>
+      </div>
+      <div class="terms"><span>Sin prepago</span><span>Seguro obligatorio</span><span>Decisión por reglas</span></div>
+
+      <article class="decision-slip" aria-live="polite">
+        <div class="winner-copy"><p class="eyebrow">Adjudicación determinística</p><span class="stamp selected">Seleccionado</span><h2>Fletes del Norte</h2><strong>$8.700 <i>MXN</i></strong><p>Oferta válida · retiro a tiempo</p></div>
+        <div class="review-copy"><p class="eyebrow">Mesa de excepción</p><span class="stamp waiting">En espera</span><h2>Sin ganador limpio</h2><p>Se necesita una decisión humana.</p></div>
+        <button class="decision-action">Confirmar adjudicación</button>
+      </article>
+
+      <div class="manifest-note"><p class="eyebrow">Regla de adjudicación</p><p>Gana el menor precio que cumple máximo, horario y condiciones.</p></div>
+    </section>
+
+    <section class="dispatches" aria-labelledby="dispatch-title">
+      <div class="dispatch-head"><div><p class="eyebrow">Negociaciones en curso</p><h2 id="dispatch-title">Despachos de carrier</h2></div><span class="active-call"><i></i> Llamada activa</span></div>
+
+      <article class="ticket valid">
+        <button class="ticket-main" aria-expanded="false">
+          <span class="call-mark"><i></i></span><span class="carrier"><small>SIM · CERRADA</small><b>Fletes del Norte</b></span><span class="stamp selected">Válido · a tiempo</span>
+          <span class="offer"><small>Oferta actual</small><strong>$8.700</strong><i>MXN</i></span><span class="annotation">Seleccionado</span>
+        </button>
+        <div class="ticket-detail">03 SEP · dentro de ventana · sin condiciones prohibidas</div>
+      </article>
+
+      <article class="ticket late">
+        <button class="ticket-main" aria-expanded="false">
+          <span class="call-mark"><i></i></span><span class="carrier"><small>SIM · NUEVA OFERTA</small><b>Transportes del Pacífico</b></span><span class="stamp rejected">Inválido · tarde</span>
+          <span class="offer fresh"><small>Oferta actual</small><strong>$8.250</strong><i>MXN</i></span><span class="annotation">Más barato, pero llega tarde</span>
+        </button>
+        <div class="ticket-detail">Precio autorizado · retiro después de las 18:00 · requiere revisión</div>
+      </article>
+
+      <article class="ticket over">
+        <button class="ticket-main" aria-expanded="false">
+          <span class="call-mark"><i></i></span><span class="carrier"><small>HUMANO · NEGOCIANDO</small><b>You (carrier)</b></span><span class="stamp rejected">Sobre máximo</span>
+          <span class="offer"><small>Última oferta</small><strong>$9.400</strong><i>MXN</i></span><span class="annotation">Volta prepara contrapropuesta</span>
+        </button>
+        <div class="ticket-detail">$400 sobre mandato · horario válido · llamada todavía abierta</div>
+      </article>
+    </section>
+
+    <aside class="paper-tabs" aria-label="Evidencia secundaria">
+      <details><summary>Detalle</summary><p>Mandato y decisión completos.</p></details>
+      <details><summary>Condiciones</summary><p>Sin prepago · seguro obligatorio.</p></details>
+      <details><summary>Actividad</summary><pre>{ "kind": "carrier_offer" }</pre></details>
+      <details><summary>Transcripción</summary><p>Evidencia secundaria, colapsada.</p></details>
+    </aside>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
