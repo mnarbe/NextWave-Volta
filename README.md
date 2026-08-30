@@ -54,7 +54,9 @@ Each folder has one owner (see [EQUIPO.md](EQUIPO.md)):
 | `src/telephony/stream.ts` | Phone transport: `/twilio/media` ↔ OpenAI. | call |
 | `src/telephony/twilio.ts` | TwiML, outbound calls, number config, geo permissions. | call |
 | `src/telephony/routing.ts` | Who is on the other end of an inbound call (provider vs carrier). | call |
-| `src/telephony/handoff.ts` | What happens after a call ends — today: ring the provider back as the carrier. | call |
+| `src/telephony/handoff.ts` | What happens after a call ends — today: open the round and ring the human carrier. | call |
+| `src/telephony/winner-call.ts` | Rings the winning carrier back to confirm. | call |
+| `src/negotiation/` | Roster, the parallel round, and the scripted carriers. | call |
 | `src/agent/realtime.ts` | Bridge to OpenAI. Picks the codec per transport. | call |
 | `src/agent/prompts.ts` · `src/agent/tools.ts` | What Volta knows and can do. | call |
 | `src/domain/` | Types, mandate validation, defaults. | data |
@@ -167,10 +169,15 @@ required fields are still missing), reads the brief back for confirmation, and
 **hangs up itself**. The mandate lands in `data/mandate.json` and in big type on
 the dashboard.
 
-**2. Negotiation — automatic.** Three seconds after that call ends, **Volta rings
-you back on the same number**, this time to negotiate: you play the carrier. One
-phone covers both roles, so the whole loop demos off a single line. Volta
-negotiates against the cap, records every offer/condition/delay, and closes.
+**2. The round — automatic.** The moment that call ends, Volta opens a round
+against all three carriers at once. The two scripted ones start quoting
+immediately; three seconds later **your phone rings** and you play the human
+carrier. One phone covers both roles, so the whole loop demos off a single line.
+Volta shops each carrier against the cap and tells them it will let them know.
+
+**3. The decision.** Once everyone has quoted, the comparator picks the best
+clean offer and Volta calls that carrier back to confirm and book. That is the
+only call where it commits.
 
 If you miss the callback and dial in instead, Volta still knows you are the
 carrier and picks up the negotiation rather than starting a fresh intake.
